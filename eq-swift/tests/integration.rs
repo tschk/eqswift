@@ -19,11 +19,7 @@ fn library_compiles() {
     // The fact that this test binary exists means the library compiled.
     // This is a trivial sanity check.
     let dylib = target_dir().join(format!("libeqswift{}", std::env::consts::DLL_SUFFIX));
-    assert!(
-        dylib.exists(),
-        "library should exist: {}",
-        dylib.display()
-    );
+    assert!(dylib.exists(), "library should exist: {}", dylib.display());
 }
 
 #[test]
@@ -53,12 +49,21 @@ fn swift_bindings_generated() {
 
     assert!(swift.exists(), "eqswift.swift should be generated");
     assert!(header.exists(), "eqswiftFFI.h should be generated");
-    assert!(modulemap.exists(), "eqswiftFFI.modulemap should be generated");
+    assert!(
+        modulemap.exists(),
+        "eqswiftFFI.modulemap should be generated"
+    );
 
     let contents = std::fs::read_to_string(&swift).unwrap();
     assert!(contents.contains("public func add"), "add function missing");
-    assert!(contents.contains("public struct Person"), "Person struct missing");
-    assert!(contents.contains("open class Greeter"), "Greeter class missing");
+    assert!(
+        contents.contains("public struct Person"),
+        "Person struct missing"
+    );
+    assert!(
+        contents.contains("open class Greeter"),
+        "Greeter class missing"
+    );
     assert!(
         contents.contains("func greet(name: String)"),
         "greet method missing"

@@ -77,17 +77,17 @@
 pub use eqswift_macros::{export, setup};
 
 // Re-export UniFFI derives so users can write `#[derive(eqswift::Record)]` etc.
-pub use uniffi::Record;
-pub use uniffi::Object;
 pub use uniffi::Enum;
 pub use uniffi::Error;
+pub use uniffi::Object;
+pub use uniffi::Record;
 
 // Re-export UniFFI internals so eqswift-macros can emit paths that work
 // in downstream crates without requiring uniffi as a direct dependency.
 #[doc(hidden)]
-pub use uniffi::export as __uniffi_export;
-#[doc(hidden)]
 pub use uniffi::constructor as __uniffi_constructor;
+#[doc(hidden)]
+pub use uniffi::export as __uniffi_export;
 #[doc(hidden)]
 pub use uniffi::setup_scaffolding;
 
@@ -95,10 +95,63 @@ pub use uniffi::setup_scaffolding;
 extern crate self as eqswift;
 
 // ---------------------------------------------------------------------------
-// Example API (smoke test — these items are exported to Swift)
+// Transports + demo API (exported to Swift via UniFFI)
 // ---------------------------------------------------------------------------
 
 eqswift::setup!();
+
+mod transport_types;
+mod matrix;
+mod stalwart;
+
+fn json_result(result: Result<serde_json::Value, String>) -> String {
+    match result {
+        Ok(v) => serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string()),
+        Err(e) => serde_json::json!({ "error": e }).to_string(),
+    }
+}
+
+/// Matrix Client-Server health snapshot as JSON (uses `MATRIX_*` env).
+#[eqswift::export]
+pub fn matrix_health_json() -> String {
+    let c = matrix::MatrixClient::from_env();
+    json_result(c.invoke("health", &serde_json::json!({})))
+}
+
+/// Send plain text to the configured Matrix room (`MATRIX_ROOM_ID`).
+#[eqswift::export]
+pub fn matrix_send_json(text: String) -> String {
+    let c = matrix::MatrixClient::from_env();
+    json_result(c.invoke("send", &serde_json::json!({ "text": text })))
+}
+
+/// Stalwart JMAP health snapshot (`STALWART_*` env).
+#[eqswift::export]
+pub fn stalwart_health_json() -> String {
+    let c = stalwart::StalwartClient::from_env();
+    json_result(c.invoke("health", &serde_json::json!({})))
+}
+
+/// Archive a short text payload via Stalwart JMAP (`STALWART_*` env).
+#[eqswift::export]
+pub fn stalwart_send_json(text: String) -> String {
+    let c = stalwart::StalwartClient::from_env();
+    json_result(c.invoke("send", &serde_json::json!({ "text": text })))
+}
+
+/// Bitchat: upstream SwiftPM is executable-only — static status JSON for UI.
+#[eqswift::export]
+pub fn bitchat_status_json() -> String {
+    serde_json::json!({
+        "id": "bitchat",
+        "name": "Bitchat",
+        "role": "mesh",
+        "connected": false,
+        "latency_ms": 0,
+        "last_error": "permissionlesstech/bitchat exposes an executable product only — no Swift library to link yet."
+    })
+    .to_string()
+}
 
 /// A simple data record exported to Swift as a `struct`.
 #[derive(eqswift::Record)]

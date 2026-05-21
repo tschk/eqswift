@@ -147,12 +147,7 @@ fn build(release: bool, target: Option<String>, extra_args: Vec<String>) -> Resu
     Ok(())
 }
 
-fn generate(
-    lang: Language,
-    release: bool,
-    out_dir: PathBuf,
-    target: Option<String>,
-) -> Result<()> {
+fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<String>) -> Result<()> {
     let metadata = cargo_metadata::MetadataCommand::new()
         .exec()
         .context("failed to run cargo metadata")?;
@@ -165,13 +160,22 @@ fn generate(
     let lib_name = root
         .targets
         .iter()
-        .find(|t| t.kind.iter().any(|k| k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib"))
+        .find(|t| {
+            t.kind
+                .iter()
+                .any(|k| k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib")
+        })
         .map(|t| t.name.as_str())
         .unwrap_or(&root.name);
 
     let profile = if release { "release" } else { "debug" };
 
-    let lib_path = find_library(metadata.target_directory.as_std_path(), lib_name, profile, target.as_deref())?;
+    let lib_path = find_library(
+        metadata.target_directory.as_std_path(),
+        lib_name,
+        profile,
+        target.as_deref(),
+    )?;
 
     fs_err::create_dir_all(&out_dir)?;
 
@@ -204,10 +208,7 @@ fn generate(
         lang_name(lang),
         out_dir.display()
     );
-    eprintln!(
-        "  └── {}.{}  (and FFI headers)",
-        lib_name, ext
-    );
+    eprintln!("  └── {}.{}  (and FFI headers)", lib_name, ext);
 
     Ok(())
 }
