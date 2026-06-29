@@ -11,7 +11,8 @@ eq-swift/swift/Generated/
 swift/Generated/
 
 # All build targets (including workspace members)
-*/target/
+**/target/
+examples/otto-ffi/target/
 
 # Swift
 swift/.build/

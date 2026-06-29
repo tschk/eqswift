@@ -12,6 +12,8 @@
 //!   --language swift --out-dir examples/demo/swift
 //! ```
 
+eqswift::setup!();
+
 use eqswift::Record;
 
 #[derive(Record)]

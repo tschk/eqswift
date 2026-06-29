@@ -8,4 +8,4 @@ publish = false
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-eqswift = { path = "../.." }
+eqswift = { path = "../../eq-swift" }

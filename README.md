@@ -1,6 +1,6 @@
-# eq-swift
+# eqswift
 
-Zero-config Rust-to-Swift FFI. Annotate your Rust code, build, generate Swift — no UDL files, no build scripts.
+FFI framework only: UniFFI proc-macro wrappers + `cargo eqswift` for Swift bindings. No transports or app logic in the library crate — annotate Rust, build, generate Swift (no UDL, no `build.rs`).
 
 ## Quick Start
 
@@ -99,16 +99,14 @@ eqswift/
 │           └── uniffi-bindgen.rs   # Binding generator binary
 ├── cargo-eqswift/             # cargo subcommand
 │   ├── Cargo.toml
-│   └── src/main.rs            # cargo eqswift swift / build / kotlin / python
+│   └── src/main.rs            # cargo eqswift swift / build
 ├── examples/
 │   └── otto-ffi/              # Real-world example: AI autocomplete backend
 │       ├── Cargo.toml
 │       └── src/lib.rs
 └── swift/                     # Swift package
     ├── Package.swift
-    └── Sources/
-        └── EqSwift/
-            └── EqSwift.swift
+    └── Generated/             # cargo eqswift swift (not committed)
 ```
 
 ## Installing `cargo eqswift`
@@ -123,7 +121,7 @@ Then use it from any eqswift project:
 cargo eqswift swift                    # generate Swift bindings
 cargo eqswift swift --release          # use release build
 cargo eqswift build                    # cargo build + generate Swift
-cargo eqswift kotlin --out-dir ./out   # generate Kotlin bindings
+cargo eqswift swift --static           # static lib link hints (iOS ship)
 ```
 
 ## Detailed Usage
@@ -205,11 +203,9 @@ cargo eqswift swift --release
 # Build + generate in one step
 cargo eqswift build
 
-# Generate Kotlin bindings
-cargo eqswift kotlin --out-dir ./android/src/main/java
-
-# Generate Python bindings
-cargo eqswift python --out-dir ./python/eqswift
+# Static linking (uses libeqswift.a when built)
+cargo eqswift swift --static --release
+EQSWIFT_STATIC=1 EQSWIFT_PROFILE=release swift build
 ```
 
 ### With `uniffi-bindgen` directly
@@ -252,9 +248,8 @@ cargo build --release --target aarch64-apple-darwin
 cargo build --release --target aarch64-apple-ios
 
 # Generate bindings once (metadata is arch-agnostic)
-cargo eqswift swift --release \
-  --library target/aarch64-apple-darwin/release/libeqswift.dylib \
-  --out-dir swift/Generated
+cargo build -p eqswift --release --target aarch64-apple-darwin
+cargo eqswift swift --release --target aarch64-apple-darwin --out-dir swift/Generated
 ```
 
 ## Swift Package integration
@@ -264,28 +259,7 @@ The generated files are:
 - `eqswiftFFI.h` — C FFI header
 - `eqswiftFFI.modulemap` — Clang module map
 
-Add them to your Xcode project or Swift package. A minimal `Package.swift`:
-
-```swift
-// swift-tools-version:5.9
-import PackageDescription
-
-let package = Package(
-    name: "EqSwift",
-    platforms: [.macOS(.v14), .iOS(.v17)],
-    products: [.library(name: "EqSwift", targets: ["EqSwift"])],
-    targets: [
-        .target(
-            name: "EqSwift",
-            dependencies: [],
-            path: "Sources/EqSwift",
-            publicHeadersPath: "include"
-        )
-    ]
-)
-```
-
-Then symlink or copy the generated files into `Sources/EqSwift/`.
+Run `cargo eqswift swift --out-dir swift/Generated` from the repo root. This repo's `swift/Package.swift` reads bindings from `swift/Generated/` and links `../../target/<profile>/libeqswift` (dynamic) or `-force_load` `libeqswift.a` when `EQSWIFT_STATIC=1`. Set `EQSWIFT_PROFILE=release` for release Rust artifacts.
 
 ## Troubleshooting
 
@@ -323,7 +297,7 @@ cargo install cargo-eqswift
 2. `#[eqswift::export]` wraps `#[uniffi::export]`, registering functions and methods in the metadata.
 3. `#[derive(eqswift::Record)]` re-exports `uniffi::Record`, which implements the FFI conversion traits.
 4. `cargo build` embeds all metadata into the compiled library.
-5. `cargo eqswift` (or `uniffi-bindgen`) reads the metadata from the library and generates Swift/Kotlin/Python bindings.
+5. `cargo eqswift` (or `uniffi-bindgen`) reads the metadata from the library and generates Swift bindings.
 
 No UDL file is ever written or parsed. The entire interface is defined by your Rust code.
 

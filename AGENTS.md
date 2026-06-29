@@ -16,7 +16,7 @@ This is a Cargo workspace with three crates:
 - **`cargo-eqswift/`** — cargo subcommand for better DX
   - `cargo eqswift swift` — generate Swift bindings
   - `cargo eqswift build` — build + generate Swift
-  - `cargo eqswift kotlin` / `python` — other languages
+  - `cargo eqswift swift --static` — static link hints for iOS
 
 ## Build Steps
 
@@ -31,7 +31,7 @@ This is a Cargo workspace with three crates:
    ```bash
    cargo eqswift swift
    # or with explicit output directory:
-   cargo eqswift swift --out-dir eq-swift/swift/Generated
+   cargo eqswift swift --out-dir swift/Generated
    ```
 
 3. **Or generate via uniffi-bindgen directly:**
@@ -49,7 +49,7 @@ This is a Cargo workspace with three crates:
 
 4. **Verify bindings were created:**
    ```bash
-   ls eq-swift/swift/Generated/
+   ls swift/Generated/
    # should show: eqswift.swift, eqswiftFFI.h, eqswiftFFI.modulemap
    ```
 
@@ -97,10 +97,9 @@ When editing `eq-swift/src/lib.rs`:
 
 ## Swift Side
 
-The `swift/` directory at the repo root is the Swift package. The generated bindings go in `eq-swift/swift/Generated/` (or wherever `cargo eqswift swift --out-dir` points). When integrating with Xcode or SPM:
+The `swift/` directory is an optional sample Swift package. Generated bindings go in `swift/Generated/` via `cargo eqswift swift --out-dir swift/Generated` (gitignored). This repo is an FFI framework only — no app transports or product logic in the `eqswift` crate.
 
-- Copy or symlink `eq-swift/swift/Generated/eqswift.swift` into the Swift package sources.
-- Include `eqswiftFFI.h` and `eqswiftFFI.modulemap` for the C FFI layer.
+- `swift/Package.swift` consumes `Generated/` and links `target/<profile>/libeqswift` (see `EQSWIFT_PROFILE`, `EQSWIFT_STATIC`).
 - Link the Rust library (`libeqswift.dylib` / `.so` / `.a`) to the Swift target.
 
 ## Testing

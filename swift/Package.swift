@@ -1,8 +1,16 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-/// Rust `eqswift` dylib (workspace root `../target/debug`, relative to this manifest).
-let rustLibDir = "../../target/debug"
+let profile = ProcessInfo.processInfo.environment["EQSWIFT_PROFILE"] ?? "debug"
+let staticLink = ProcessInfo.processInfo.environment["EQSWIFT_STATIC"] == "1"
+let rustLibDir = "../../target/\(profile)"
+
+var rustLinkFlags = ["-L", rustLibDir]
+if staticLink {
+    rustLinkFlags += ["-force_load", "\(rustLibDir)/libeqswift.a"]
+} else {
+    rustLinkFlags += ["-leqswift"]
+}
 
 let package = Package(
     name: "EqSwift",
@@ -13,16 +21,15 @@ let package = Package(
     targets: [
         .systemLibrary(
             name: "eqswiftFFI",
-            path: "eqswiftFFI"
+            path: "Generated"
         ),
         .target(
             name: "EqSwift",
             dependencies: ["eqswiftFFI"],
-            path: "Sources/EqSwift",
+            path: "Generated",
+            sources: ["eqswift.swift"],
             linkerSettings: [
-                .unsafeFlags([
-                    "-L", rustLibDir, "-leqswift",
-                ]),
+                .unsafeFlags(rustLinkFlags),
             ]
         ),
     ]

@@ -98,11 +98,3 @@ fn auto_constructor_detected() {
         "auto-constructor should be detected"
     );
 }
-
-#[test]
-fn auto_setup_works_without_explicit_setup_call() {
-    // This test binary itself is proof — eq-swift/src/lib.rs no longer calls
-    // eqswift::setup!() explicitly, yet everything compiled and binds generated.
-    // If it didn't work, the library wouldn't have compiled.
-    assert!(true);
-}

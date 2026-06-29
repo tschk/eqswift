@@ -1,9 +1,9 @@
 [package]
 name = "cargo-eqswift"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["eqswift contributors"]
-description = "cargo subcommand for eqswift — generate Swift/Kotlin/Python bindings with one command"
+description = "cargo subcommand for eqswift — build and generate Swift bindings"
 license = "MPL-2.0"
 repository = "https://github.com/tschk/eqswift"
 keywords = ["cargo-subcommand", "ffi", "swift", "uniffi", "bindings"]

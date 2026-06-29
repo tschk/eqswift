@@ -1,15 +1,16 @@
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use cargo_metadata::{Metadata, Package};
+use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// cargo eqswift — zero-config Rust-to-Swift FFI
 ///
 /// Examples:
-///   cargo eqswift swift                    # generate Swift bindings
-///   cargo eqswift swift --release          # use release build
-///   cargo eqswift build                    # build + generate Swift
-///   cargo eqswift kotlin --out-dir ./out   # generate Kotlin bindings
+///   cargo eqswift swift                    # generate Swift bindings (dylib)
+///   cargo eqswift swift --release          # release build artifacts
+///   cargo eqswift swift --static           # static link hints (libeqswift.a)
+///   cargo eqswift build                    # cargo build + generate Swift
 #[derive(Parser)]
 #[command(name = "cargo-eqswift")]
 #[command(bin_name = "cargo")]
@@ -21,7 +22,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate foreign-language bindings
     #[command(name = "eqswift")]
     Eqswift {
         #[command(subcommand)]
@@ -31,69 +31,38 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum EqswiftCmd {
-    /// Generate Swift bindings
     Swift {
-        /// Build in release mode
         #[arg(long)]
         release: bool,
-        /// Output directory for generated bindings
         #[arg(long, default_value = "swift/Generated")]
         out_dir: PathBuf,
-        /// Target triple (e.g. aarch64-apple-darwin)
         #[arg(long)]
         target: Option<String>,
+        #[arg(long = "static", help = "Resolve lib{name}.a and print static SPM linker flags")]
+        static_link: bool,
     },
-    /// Generate Kotlin bindings
-    Kotlin {
-        /// Build in release mode
-        #[arg(long)]
-        release: bool,
-        /// Output directory for generated bindings
-        #[arg(long, default_value = "kotlin/Generated")]
-        out_dir: PathBuf,
-        /// Target triple
-        #[arg(long)]
-        target: Option<String>,
-    },
-    /// Generate Python bindings
-    Python {
-        /// Build in release mode
-        #[arg(long)]
-        release: bool,
-        /// Output directory for generated bindings
-        #[arg(long, default_value = "python/Generated")]
-        out_dir: PathBuf,
-        /// Target triple
-        #[arg(long)]
-        target: Option<String>,
-    },
-    /// Build the Rust library and generate Swift bindings
     Build {
-        /// Build in release mode
         #[arg(long)]
         release: bool,
-        /// Output directory for generated bindings
         #[arg(long, default_value = "swift/Generated")]
         out_dir: PathBuf,
-        /// Target triple
         #[arg(long)]
         target: Option<String>,
-        /// Extra arguments to pass to cargo build
+        #[arg(long = "static")]
+        static_link: bool,
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum Language {
-    Swift,
-    Kotlin,
-    Python,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    Dynamic,
+    Static,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
     let cmd = match cli.command {
         Commands::Eqswift { cmd } => cmd,
     };
@@ -103,32 +72,63 @@ fn main() -> Result<()> {
             release,
             out_dir,
             target,
-        } => generate(Language::Swift, release, out_dir, target),
-        EqswiftCmd::Kotlin {
-            release,
-            out_dir,
-            target,
-        } => generate(Language::Kotlin, release, out_dir, target),
-        EqswiftCmd::Python {
-            release,
-            out_dir,
-            target,
-        } => generate(Language::Python, release, out_dir, target),
+            static_link,
+        } => generate(release, out_dir, target, link_mode(static_link)),
         EqswiftCmd::Build {
             release,
             out_dir,
             target,
+            static_link,
             cargo_args,
         } => {
-            build(release, target.clone(), cargo_args)?;
-            generate(Language::Swift, release, out_dir, target)
+            let meta = cargo_metadata::MetadataCommand::new()
+                .exec()
+                .context("failed to run cargo metadata")?;
+            let root = resolve_library_package(&meta)?;
+            build(release, target.clone(), cargo_args, Some(&root.name))?;
+            generate(release, out_dir, target, link_mode(static_link))
         }
     }
 }
 
-fn build(release: bool, target: Option<String>, extra_args: Vec<String>) -> Result<()> {
+fn resolve_library_package<'a>(metadata: &'a Metadata) -> Result<&'a Package> {
+    if let Some(pkg) = metadata.root_package() {
+        return Ok(pkg);
+    }
+    metadata
+        .packages
+        .iter()
+        .find(|p| {
+            p.targets.iter().any(|t| {
+                t.crate_types
+                    .iter()
+                    .any(|k| k == "cdylib" || k == "staticlib")
+            })
+        })
+        .context(
+            "no root package — run from a crate directory, or add a cdylib package to the workspace",
+        )
+}
+
+fn link_mode(static_link: bool) -> LinkMode {
+    if static_link {
+        LinkMode::Static
+    } else {
+        LinkMode::Dynamic
+    }
+}
+
+fn build(
+    release: bool,
+    target: Option<String>,
+    extra_args: Vec<String>,
+    package: Option<&str>,
+) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
+    if let Some(pkg) = package {
+        cmd.args(["-p", pkg]);
+    }
     if release {
         cmd.arg("--release");
     }
@@ -147,16 +147,18 @@ fn build(release: bool, target: Option<String>, extra_args: Vec<String>) -> Resu
     Ok(())
 }
 
-fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<String>) -> Result<()> {
+fn generate(
+    release: bool,
+    out_dir: PathBuf,
+    target: Option<String>,
+    link_mode: LinkMode,
+) -> Result<()> {
     let metadata = cargo_metadata::MetadataCommand::new()
         .exec()
         .context("failed to run cargo metadata")?;
 
-    let root = metadata
-        .root_package()
-        .context("no root package found — run from a cargo project root")?;
+    let root = resolve_library_package(&metadata)?;
 
-    // Find the library target name (may differ from package name)
     let lib_name = root
         .targets
         .iter()
@@ -170,11 +172,12 @@ fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<Stri
 
     let profile = if release { "release" } else { "debug" };
 
-    let lib_path = find_library(
+    let (lib_path, resolved_mode) = find_library(
         metadata.target_directory.as_std_path(),
         lib_name,
         profile,
         target.as_deref(),
+        link_mode,
     )?;
 
     fs_err::create_dir_all(&out_dir)?;
@@ -182,6 +185,8 @@ fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<Stri
     let mut cmd = Command::new("cargo");
     cmd.args([
         "run",
+        "-p",
+        &root.name,
         "--bin",
         "uniffi-bindgen",
         "--",
@@ -189,7 +194,7 @@ fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<Stri
         "--library",
     ]);
     cmd.arg(&lib_path);
-    cmd.args(["--language", lang_flag(lang), "--out-dir"]);
+    cmd.args(["--language", "swift", "--out-dir"]);
     cmd.arg(&out_dir);
 
     eprintln!("  Running: {:?}", cmd);
@@ -198,19 +203,56 @@ fn generate(lang: Language, release: bool, out_dir: PathBuf, target: Option<Stri
         bail!("uniffi-bindgen failed");
     }
 
-    let ext = match lang {
-        Language::Swift => "swift",
-        Language::Kotlin => "kt",
-        Language::Python => "py",
-    };
-    eprintln!(
-        "✓ Generated {} bindings in {}",
-        lang_name(lang),
-        out_dir.display()
-    );
-    eprintln!("  └── {}.{}  (and FFI headers)", lib_name, ext);
+    install_spm_modulemap(&out_dir)?;
+
+    eprintln!("✓ Generated Swift bindings in {}", out_dir.display());
+    eprintln!("  └── eqswift.swift  (and eqswiftFFI headers)");
+
+    let lib_dir = lib_path.parent().context("library path has no parent")?;
+    print_linker_hints(lib_name, lib_dir, profile, resolved_mode, target.as_deref());
 
     Ok(())
+}
+
+fn install_spm_modulemap(out_dir: &Path) -> Result<()> {
+    let src = out_dir.join("eqswiftFFI.modulemap");
+    let dst = out_dir.join("module.modulemap");
+    if src.exists() && !dst.exists() {
+        fs_err::copy(&src, &dst)?;
+    }
+    Ok(())
+}
+
+fn print_linker_hints(
+    lib_name: &str,
+    lib_dir: &Path,
+    profile: &str,
+    link_mode: LinkMode,
+    target: Option<&str>,
+) {
+    let dir = lib_dir.display();
+    eprintln!();
+    eprintln!("Linker (SPM Package.swift or Xcode):");
+    eprintln!("  profile: {profile}");
+    if let Some(t) = target {
+        eprintln!("  target:  {t}");
+    }
+    eprintln!("  rust lib dir: {}", dir);
+    match link_mode {
+        LinkMode::Dynamic => {
+            eprintln!("  dynamic: .unsafeFlags([\"-L\", \"{dir}\", \"-l{lib_name}\"])");
+            eprintln!("  run (macOS dev): export DYLD_LIBRARY_PATH=\"{dir}:$DYLD_LIBRARY_PATH\"");
+        }
+        LinkMode::Static => {
+            let archive = lib_dir.join(format!("lib{lib_name}.a"));
+            eprintln!(
+                "  static:  .unsafeFlags([\"-L\", \"{dir}\", \"-force_load\", \"{}\"])",
+                archive.display()
+            );
+            eprintln!("  bindgen still uses cdylib/dylib metadata when present; built staticlib for app link.");
+        }
+    }
+    eprintln!("  env overrides for swift/Package.swift: EQSWIFT_PROFILE, EQSWIFT_STATIC=1");
 }
 
 fn find_library(
@@ -218,45 +260,45 @@ fn find_library(
     lib_name: &str,
     profile: &str,
     target: Option<&str>,
-) -> Result<PathBuf> {
+    prefer: LinkMode,
+) -> Result<(PathBuf, LinkMode)> {
     let target_path = match target {
         Some(t) => target_dir.join(t).join(profile),
         None => target_dir.join(profile),
     };
 
-    let candidates = [
-        format!("lib{}.dylib", lib_name),
-        format!("lib{}.so", lib_name),
-        format!("{}.dll", lib_name),
+    let static_candidates = [
+        format!("lib{lib_name}.a"),
+        format!("{lib_name}.lib"),
+    ];
+    let dynamic_candidates = [
+        format!("lib{lib_name}.dylib"),
+        format!("lib{lib_name}.so"),
+        format!("{lib_name}.dll"),
     ];
 
-    for candidate in &candidates {
-        let path = target_path.join(candidate);
-        if path.exists() {
-            return Ok(path);
+    let try_order: &[LinkMode] = match prefer {
+        LinkMode::Static => &[LinkMode::Static, LinkMode::Dynamic],
+        LinkMode::Dynamic => &[LinkMode::Dynamic, LinkMode::Static],
+    };
+
+    for mode in try_order {
+        let names = match mode {
+            LinkMode::Static => &static_candidates[..],
+            LinkMode::Dynamic => &dynamic_candidates[..],
+        };
+        for candidate in names {
+            let path = target_path.join(candidate);
+            if path.exists() {
+                return Ok((path, *mode));
+            }
         }
     }
 
     bail!(
-        "could not find compiled library for '{}' in {}. \
-         Did you run `cargo build` first?",
+        "could not find compiled library for '{}' in {} (tried static and dynamic). \
+         Run `cargo build` first.",
         lib_name,
         target_path.display()
     );
-}
-
-fn lang_flag(lang: Language) -> &'static str {
-    match lang {
-        Language::Swift => "swift",
-        Language::Kotlin => "kotlin",
-        Language::Python => "python",
-    }
-}
-
-fn lang_name(lang: Language) -> &'static str {
-    match lang {
-        Language::Swift => "Swift",
-        Language::Kotlin => "Kotlin",
-        Language::Python => "Python",
-    }
 }

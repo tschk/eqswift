@@ -1,6 +1,6 @@
 [package]
 name = "eqswift-macros"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Max Carter <max@undivisible.dev>"]
 description = "Proc-macros for eqswift — zero-config Rust-to-Swift FFI"
