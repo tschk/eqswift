@@ -316,4 +316,4 @@ This verifies:
 
 ## License
 
-MPL-2.0
+ISC
