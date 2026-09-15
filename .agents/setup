@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Idempotent orb setup for eqswift (Rust workspace).
+set -euo pipefail
+
+step() {
+  local label="$1"
+  shift
+  local start
+  start="$(date +%s)"
+  echo "==> ${label}"
+  "$@"
+  echo "    (${label}: $(( $(date +%s) - start ))s)"
+}
+
+need_apt=()
+for pkg in build-essential pkg-config curl ca-certificates git; do
+  if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+    need_apt+=("$pkg")
+  fi
+done
+if ((${#need_apt[@]})); then
+  step "apt-get update" sudo apt-get update -y
+  step "apt-get install ${need_apt[*]}" sudo apt-get install -y "${need_apt[@]}"
+else
+  echo "==> system packages already present"
+fi
+
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+export PATH="${CARGO_HOME}/bin:${PATH}"
+
+if [ -f "${CARGO_HOME}/env" ]; then
+  # shellcheck disable=SC1091
+  source "${CARGO_HOME}/env"
+fi
+
+if ! command -v rustup >/dev/null 2>&1; then
+  step "install rustup" bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal'
+  # shellcheck disable=SC1091
+  source "${CARGO_HOME}/env"
+else
+  echo "==> rustup already installed"
+fi
+
+step "rustup toolchain" rustup toolchain install stable --profile minimal --no-self-update
+step "rustup default" rustup default stable
+step "rustup components" rustup component add rustfmt clippy --toolchain stable
+
+if ! grep -Fqx '# eqswift rustup' "$HOME/.bashrc" 2>/dev/null; then
+  cat >> "$HOME/.bashrc" <<'EOF'
+
+# eqswift rustup
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+EOF
+fi
+if ! grep -Fqx '# eqswift rustup' "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<'EOF'
+
+# eqswift rustup
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+EOF
+fi
+
+step "cargo fetch" cargo fetch --locked
+
+echo "==> setup complete"
+rustc --version
+cargo --version
