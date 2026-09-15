@@ -47,3 +47,6 @@ DerivedData/
 
 # OS
 *.log
+
+# Amp orb
+.amp/portals/
