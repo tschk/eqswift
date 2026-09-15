@@ -28,7 +28,7 @@
 //!
 //! #[eqswift::export]
 //! impl Greeter {
-//!     // Automatically detected as constructor — no attribute needed
+//!     #[uniffi::constructor]
 //!     pub fn new() -> Self {
 //!         Self
 //!     }
@@ -50,7 +50,7 @@
 //! | Macro | Purpose |
 //! |-------|---------|
 //! | [`setup!`](eqswift_macros::setup) | One-time initialization. Call once at the top of `lib.rs`. |
-//! | [`export`](eqswift_macros::export) | Mark a free function or `impl` block for export. Auto-detects constructors. |
+//! | [`export`](eqswift_macros::export) | Mark a free function or `impl` block for export. Constructors need `#[uniffi::constructor]`. |
 //! | [`Record`](uniffi::Record) | Derive for plain data structs (Swift `struct`). |
 //! | [`Object`](uniffi::Object) | Derive for reference types with methods (Swift `class`). |
 //! | [`Enum`](uniffi::Enum) | Derive for enums. |
@@ -100,7 +100,7 @@ pub struct Person {
 }
 
 /// An object exported to Swift as a `class` with methods.
-#[derive(eqswift::Object)]
+#[derive(eqswift::Object, Default)]
 pub struct Greeter;
 
 #[eqswift::export]

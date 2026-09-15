@@ -38,7 +38,10 @@ enum EqswiftCmd {
         out_dir: PathBuf,
         #[arg(long)]
         target: Option<String>,
-        #[arg(long = "static", help = "Resolve lib{name}.a and print static SPM linker flags")]
+        #[arg(
+            long = "static",
+            help = "Resolve lib{name}.a and print static SPM linker flags"
+        )]
         static_link: bool,
     },
     Build {
@@ -91,7 +94,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn resolve_library_package<'a>(metadata: &'a Metadata) -> Result<&'a Package> {
+fn resolve_library_package(metadata: &Metadata) -> Result<&Package> {
     if let Some(pkg) = metadata.root_package() {
         return Ok(pkg);
     }
@@ -267,10 +270,7 @@ fn find_library(
         None => target_dir.join(profile),
     };
 
-    let static_candidates = [
-        format!("lib{lib_name}.a"),
-        format!("{lib_name}.lib"),
-    ];
+    let static_candidates = [format!("lib{lib_name}.a"), format!("{lib_name}.lib")];
     let dynamic_candidates = [
         format!("lib{lib_name}.dylib"),
         format!("lib{lib_name}.so"),

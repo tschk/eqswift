@@ -8,7 +8,7 @@ license = "ISC"
 repository = "https://github.com/tschk/eqswift"
 keywords = ["cargo-subcommand", "ffi", "swift", "uniffi", "bindings"]
 categories = ["development-tools::cargo-plugins", "development-tools::ffi"]
-rust-version = "1.70"
+rust-version = "1.87"
 
 [[bin]]
 name = "cargo-eqswift"
