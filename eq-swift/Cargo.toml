@@ -8,7 +8,7 @@ license = "ISC"
 repository = "https://github.com/tschk/eqswift"
 keywords = ["ffi", "swift", "uniffi", "bindings", "ios"]
 categories = ["development-tools::ffi"]
-rust-version = "1.70"
+rust-version = "1.87"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
@@ -16,10 +16,15 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["uniffi/cli"]
 
 [dependencies]
 eqswift-macros = { version = "0.1.2", path = "../eqswift-macros" }
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.31" }
 
 [dev-dependencies]
 tempfile = "3.10"

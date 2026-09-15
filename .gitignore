@@ -1,6 +1,5 @@
 # Rust
 /target
-Cargo.lock
 **/*.rs.bk
 
 # Generated UniFFI scaffolding (legacy)
@@ -13,6 +12,7 @@ swift/Generated/
 # All build targets (including workspace members)
 **/target/
 examples/otto-ffi/target/
+examples/demo/Cargo.lock
 
 # Swift
 swift/.build/

@@ -1,4 +1,5 @@
 // swift-tools-version:5.9
+import Foundation
 import PackageDescription
 
 let profile = ProcessInfo.processInfo.environment["EQSWIFT_PROFILE"] ?? "debug"

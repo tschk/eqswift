@@ -8,7 +8,7 @@ license = "ISC"
 repository = "https://github.com/tschk/eqswift"
 keywords = ["ffi", "swift", "uniffi", "bindings", "proc-macro"]
 categories = ["development-tools::ffi"]
-rust-version = "1.70"
+rust-version = "1.87"
 
 [lib]
 proc-macro = true

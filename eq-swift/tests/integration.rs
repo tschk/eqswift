@@ -14,33 +14,52 @@ fn target_dir() -> PathBuf {
     workspace_root().join("target").join("debug")
 }
 
-#[test]
-fn library_compiles() {
-    // The fact that this test binary exists means the library compiled.
-    // This is a trivial sanity check.
-    let dylib = target_dir().join(format!("libeqswift{}", std::env::consts::DLL_SUFFIX));
+fn library_path() -> PathBuf {
+    target_dir().join(format!("libeqswift{}", std::env::consts::DLL_SUFFIX))
+}
+
+/// `cargo test` links the rlib; UniFFI bindgen needs the cdylib/dylib artifact.
+fn ensure_cdylib() {
+    let status = Command::new("cargo")
+        .args(["build", "-p", "eqswift", "--quiet"])
+        .status()
+        .expect("cargo build -p eqswift should run");
+    assert!(status.success(), "cargo build -p eqswift should succeed");
+    let dylib = library_path();
     assert!(dylib.exists(), "library should exist: {}", dylib.display());
 }
 
-#[test]
-fn swift_bindings_generated() {
-    let out_dir = tempfile::tempdir().unwrap();
-
-    let status = Command::new("cargo")
+fn generate_swift(out_dir: &std::path::Path) -> std::process::ExitStatus {
+    Command::new("cargo")
         .args([
             "run",
+            "-p",
+            "eqswift",
+            "--quiet",
             "--bin",
             "uniffi-bindgen",
             "--",
             "generate",
             "--library",
         ])
-        .arg(target_dir().join(format!("libeqswift{}", std::env::consts::DLL_SUFFIX)))
+        .arg(library_path())
         .args(["--language", "swift", "--out-dir"])
-        .arg(out_dir.path())
+        .arg(out_dir)
         .status()
-        .expect("uniffi-bindgen should run");
+        .expect("uniffi-bindgen should run")
+}
 
+#[test]
+fn library_compiles() {
+    ensure_cdylib();
+}
+
+#[test]
+fn swift_bindings_generated() {
+    ensure_cdylib();
+    let out_dir = tempfile::tempdir().unwrap();
+
+    let status = generate_swift(out_dir.path());
     assert!(status.success(), "uniffi-bindgen should succeed");
 
     let swift = out_dir.path().join("eqswift.swift");
@@ -72,29 +91,15 @@ fn swift_bindings_generated() {
 
 #[test]
 fn auto_constructor_detected() {
+    ensure_cdylib();
     let out_dir = tempfile::tempdir().unwrap();
 
-    let status = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "uniffi-bindgen",
-            "--",
-            "generate",
-            "--library",
-        ])
-        .arg(target_dir().join(format!("libeqswift{}", std::env::consts::DLL_SUFFIX)))
-        .args(["--language", "swift", "--out-dir"])
-        .arg(out_dir.path())
-        .status()
-        .expect("uniffi-bindgen should run");
-
+    let status = generate_swift(out_dir.path());
     assert!(status.success());
 
     let contents = std::fs::read_to_string(out_dir.path().join("eqswift.swift")).unwrap();
-    // Constructor should be present (detected from fn new() -> Self)
     assert!(
         contents.contains("constructor"),
-        "auto-constructor should be detected"
+        "Greeter constructor should appear in generated Swift"
     );
 }

@@ -2,7 +2,7 @@
 //!
 //! Build this example:
 //! ```bash
-//! cargo build --example demo
+//! cargo build --manifest-path examples/demo/Cargo.toml
 //! ```
 //!
 //! Generate Swift bindings:
@@ -28,6 +28,7 @@ pub struct TaskManager;
 
 #[eqswift::export]
 impl TaskManager {
+    #[uniffi::constructor]
     pub fn new() -> Self {
         Self
     }
