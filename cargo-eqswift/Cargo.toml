@@ -1,6 +1,6 @@
 [package]
 name = "cargo-eqswift"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["eqswift contributors"]
 description = "cargo subcommand for eqswift — build and generate Swift bindings"

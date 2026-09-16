@@ -1,6 +1,6 @@
 [package]
 name = "eqswift"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Max Carter <max@undivisible.dev>"]
 description = "Zero-config Rust-to-Swift FFI — no UDL, no build.rs, just annotations"
@@ -19,12 +19,12 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [features]
-default = ["cli"]
+default = []
 cli = ["uniffi/cli"]
 
 [dependencies]
-eqswift-macros = { version = "0.1.2", path = "../eqswift-macros" }
-uniffi = { version = "0.31" }
+eqswift-macros = { version = "0.1.3", path = "../eqswift-macros" }
+uniffi = { version = "0.32" }
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -11,4 +11,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 eqswift = { path = "../../eq-swift" }
-uniffi = "0.31"
+uniffi = "0.32"

@@ -186,16 +186,11 @@ fn generate(
     fs_err::create_dir_all(&out_dir)?;
 
     let mut cmd = Command::new("cargo");
-    cmd.args([
-        "run",
-        "-p",
-        &root.name,
-        "--bin",
-        "uniffi-bindgen",
-        "--",
-        "generate",
-        "--library",
-    ]);
+    cmd.args(["run", "-p", &root.name]);
+    if root.features.contains_key("cli") {
+        cmd.args(["--features", "cli"]);
+    }
+    cmd.args(["--bin", "uniffi-bindgen", "--", "generate", "--library"]);
     cmd.arg(&lib_path);
     cmd.args(["--language", "swift", "--out-dir"]);
     cmd.arg(&out_dir);

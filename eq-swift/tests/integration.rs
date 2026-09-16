@@ -35,6 +35,8 @@ fn generate_swift(out_dir: &std::path::Path) -> std::process::ExitStatus {
             "run",
             "-p",
             "eqswift",
+            "--features",
+            "cli",
             "--quiet",
             "--bin",
             "uniffi-bindgen",
