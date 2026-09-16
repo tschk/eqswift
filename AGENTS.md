@@ -37,12 +37,12 @@ This is a Cargo workspace with three crates:
 3. **Or generate via uniffi-bindgen directly:**
    ```bash
    # macOS
-   cargo run --bin uniffi-bindgen generate \
+   cargo run --features cli --bin uniffi-bindgen generate \
      --library target/debug/libeqswift.dylib \
      --language swift --out-dir eq-swift/swift/Generated
 
    # Linux
-   cargo run --bin uniffi-bindgen generate \
+   cargo run --features cli --bin uniffi-bindgen generate \
      --library target/debug/libeqswift.so \
      --language swift --out-dir eq-swift/swift/Generated
    ```
@@ -74,7 +74,7 @@ Downstream crates using `eqswift` must also add `uniffi` as a direct dependency:
 ```toml
 [dependencies]
 eqswift = "0.1"
-uniffi = "0.31"
+uniffi = "0.32"
 ```
 
 This is because UniFFI's proc-macros (`#[uniffi::export]`, `#[uniffi::constructor]`, `uniffi::setup_scaffolding!()`) emit code that references `::uniffi::...` paths, which can only be resolved when `uniffi` is a direct dependency of the consuming crate.
@@ -122,7 +122,7 @@ head -n 20 /tmp/eqswift-test/eqswift.swift
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `no bin target named uniffi-bindgen` | Missing `[[bin]]` or `features = ["cli"]` | Check `eq-swift/Cargo.toml` |
+| `no bin target named uniffi-bindgen` | Missing `[[bin]]` or `--features cli` | Check `eq-swift/Cargo.toml` |
 | `setup_scaffolding!` not found | Wrong UniFFI version or missing `setup!()` | Ensure `eqswift::setup!()` is called |
 | Empty generated Swift | Bindings generated before library built | Build library first, then run bindgen |
 | Type not in Swift | Not public / not in exported signature | Make type `pub` and use it in an exported function |
@@ -131,7 +131,7 @@ head -n 20 /tmp/eqswift-test/eqswift.swift
 
 ## Dependencies
 
-- `uniffi = "0.31"` — core FFI framework
+- `uniffi = "0.32"` — core FFI framework
 - `eqswift-macros` — our thin proc-macro wrappers
 - `cargo-eqswift` — cargo subcommand for binding generation
 

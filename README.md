@@ -9,7 +9,7 @@ FFI framework only: UniFFI proc-macro wrappers + `cargo eqswift` for Swift bindi
 ```toml
 [dependencies]
 eqswift = "0.1"
-uniffi = "0.31"
+uniffi = "0.32"
 ```
 
 *(UniFFI must be a direct dependency because its proc-macros emit `::uniffi::...` paths.)*
@@ -62,9 +62,9 @@ cargo build
 cargo eqswift swift
 
 # Or the long way with uniffi-bindgen directly
-cargo run --bin uniffi-bindgen generate \
-  --library target/debug/libeqswift.dylib \
-  --language swift --out-dir swift/Generated
+cargo run --features cli --bin uniffi-bindgen generate \
+     --library target/debug/libeqswift.dylib \
+     --language swift --out-dir swift/Generated
 ```
 
 *(On Linux use `.so`, on Windows use `.dll`)*
@@ -213,7 +213,7 @@ EQSWIFT_STATIC=1 EQSWIFT_PROFILE=release swift build
 #### macOS
 
 ```bash
-cargo run --bin uniffi-bindgen generate \
+cargo run --features cli --bin uniffi-bindgen generate \
   --library target/debug/libeqswift.dylib \
   --language swift --out-dir eq-swift/swift/Generated
 ```
@@ -221,7 +221,7 @@ cargo run --bin uniffi-bindgen generate \
 #### Linux
 
 ```bash
-cargo run --bin uniffi-bindgen generate \
+cargo run --features cli --bin uniffi-bindgen generate \
   --library target/debug/libeqswift.so \
   --language swift --out-dir eq-swift/swift/Generated
 ```
@@ -229,7 +229,7 @@ cargo run --bin uniffi-bindgen generate \
 #### Windows
 
 ```bash
-cargo run --bin uniffi-bindgen generate ^
+cargo run --features cli --bin uniffi-bindgen generate ^
   --library target/debug/eqswift.dll ^
   --language swift --out-dir eq-swift/swift/Generated
 ```
@@ -265,7 +265,7 @@ Run `cargo eqswift swift --out-dir swift/Generated` from the repo root. This rep
 
 ### "no bin target named `uniffi-bindgen`"
 
-Make sure `eq-swift/Cargo.toml` has the `[[bin]]` section and `uniffi` is declared with `features = ["cli"]`.
+Make sure `eq-swift/Cargo.toml` has the `[[bin]]` section and enable the `cli` feature: `cargo run -p eqswift --features cli --bin uniffi-bindgen`.
 
 ### Generated Swift files are empty / old
 

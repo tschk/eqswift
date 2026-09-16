@@ -19,8 +19,28 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features cli -- -D warnings
       - name: Test
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --features cli
       - name: Build cdylib
         run: cargo build --locked -p eqswift
+      - name: Examples
+        run: |
+          cargo build --manifest-path examples/demo/Cargo.toml
+          cargo build --manifest-path examples/otto-ffi/Cargo.toml
+
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build library
+        run: cargo build --locked -p eqswift --features cli
+      - name: Generate Swift bindings
+        run: cargo run --locked -p eqswift --features cli --bin uniffi-bindgen -- generate --library target/debug/libeqswift.dylib --language swift --out-dir /tmp/eqswift-swift
+      - name: Check generated API
+        run: |
+          grep -q 'public func add' /tmp/eqswift-swift/eqswift.swift
+          grep -q 'public struct Person' /tmp/eqswift-swift/eqswift.swift
+          grep -q 'open class Greeter' /tmp/eqswift-swift/eqswift.swift
+          swift --version

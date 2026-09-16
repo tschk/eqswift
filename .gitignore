@@ -8,6 +8,7 @@
 # Generated Swift bindings (regenerated from Rust library)
 eq-swift/swift/Generated/
 swift/Generated/
+examples/otto-ffi/swift/
 
 # All build targets (including workspace members)
 **/target/
