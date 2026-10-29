@@ -14,6 +14,7 @@ use uniffi_bindgen::bindings::{generate as generate_bindings, GenerateOptions, T
 ///   cargo eqswift swift --static           # static link hints (lib<crate>.a)
 ///   cargo eqswift swift --module-name Foo  # override the Swift module name
 ///   cargo eqswift build                    # build cdylib + staticlib, generate Swift
+///   cargo eqswift xcframework              # iOS + iOS Simulator + macOS XCFramework
 #[derive(Parser)]
 #[command(name = "cargo-eqswift")]
 #[command(bin_name = "cargo")]
@@ -65,7 +66,27 @@ enum EqswiftCmd {
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
+    /// Build the staticlib for iOS, the iOS Simulator and macOS (arm64) and package it as an
+    /// XCFramework, with the generated Swift file next to it
+    Xcframework {
+        #[arg(long)]
+        release: bool,
+        #[arg(long, default_value = "swift/XCFramework")]
+        out_dir: PathBuf,
+        /// Swift module name (default: the crate's lib name, e.g. `my_crate`)
+        #[arg(long)]
+        module_name: Option<String>,
+    },
 }
+
+/// `cargo eqswift xcframework` slices, each the Rust targets lipo'd into it. The simulator slice
+/// needs x86_64 too: Xcode's generic iOS Simulator destination builds both architectures, and an
+/// arm64-only slice fails to link the x86_64 half.
+const XCFRAMEWORK_SLICES: [&[&str]; 3] = [
+    &["aarch64-apple-ios"],
+    &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
+    &["aarch64-apple-darwin"],
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LinkMode {
@@ -105,7 +126,13 @@ fn main() -> Result<()> {
                 .exec()
                 .context("failed to run cargo metadata")?;
             let root = resolve_library_package(&meta)?;
-            build(release, target.clone(), cargo_args, Some(&root.name))?;
+            build(
+                release,
+                target.clone(),
+                cargo_args,
+                Some(&root.name),
+                "cdylib,staticlib",
+            )?;
             generate(
                 release,
                 out_dir,
@@ -114,6 +141,11 @@ fn main() -> Result<()> {
                 link_mode(static_link),
             )
         }
+        EqswiftCmd::Xcframework {
+            release,
+            out_dir,
+            module_name,
+        } => xcframework(release, out_dir, module_name),
     }
 }
 
@@ -144,20 +176,21 @@ fn link_mode(static_link: bool) -> LinkMode {
     }
 }
 
-/// Build the package's lib as `cdylib` + `staticlib` via `cargo rustc --crate-type`, so the
-/// crate needs no `[lib] crate-type` (a plain rlib works).
+/// Build the package's lib as `crate_types` (e.g. `cdylib,staticlib`) via
+/// `cargo rustc --crate-type`, so the crate needs no `[lib] crate-type` (a plain rlib works).
 fn build(
     release: bool,
     target: Option<String>,
     extra_args: Vec<String>,
     package: Option<&str>,
+    crate_types: &str,
 ) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("rustc");
     if let Some(pkg) = package {
         cmd.args(["-p", pkg]);
     }
-    cmd.args(["--lib", "--crate-type", "cdylib,staticlib"]);
+    cmd.args(["--lib", "--crate-type", crate_types]);
     if release {
         cmd.arg("--release");
     }
@@ -189,19 +222,7 @@ fn generate(
 
     let root = resolve_library_package(&metadata)?;
 
-    // Rust crate name of the lib target: names the artifact (`lib{name}.dylib`) and is
-    // UniFFI's default namespace, which names the generated Swift files.
-    let lib_name = root
-        .targets
-        .iter()
-        .find(|t| {
-            t.kind.iter().any(|k| {
-                k == "lib" || k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib"
-            })
-        })
-        .map(|t| t.name.as_str())
-        .unwrap_or(&root.name)
-        .replace('-', "_");
+    let lib_name = lib_name(root);
     let lib_name = lib_name.as_str();
 
     let profile = if release { "release" } else { "debug" };
@@ -219,12 +240,53 @@ fn generate(
         Ok(found) => found,
         Err(_) => {
             eprintln!("  No built library for '{lib_name}' yet; building it");
-            build(release, target.clone(), Vec::new(), Some(&root.name))?;
+            build(
+                release,
+                target.clone(),
+                Vec::new(),
+                Some(&root.name),
+                "cdylib,staticlib",
+            )?;
             find()?
         }
     };
 
-    fs_err::create_dir_all(&out_dir)?;
+    let (module_name, _) = generate_swift(&metadata, lib_name, &lib_path, &out_dir, module_name)?;
+
+    eprintln!("✓ Generated Swift bindings in {}", out_dir.display());
+    eprintln!("  └── {module_name}.swift, {module_name}FFI.h, module.modulemap");
+
+    let lib_dir = lib_path.parent().context("library path has no parent")?;
+    print_linker_hints(lib_name, lib_dir, profile, resolved_mode, target.as_deref());
+
+    Ok(())
+}
+
+/// Rust crate name of the lib target: names the artifact (`lib{name}.dylib`) and is UniFFI's
+/// default namespace, which names the generated Swift files.
+fn lib_name(root: &Package) -> String {
+    root.targets
+        .iter()
+        .find(|t| {
+            t.kind.iter().any(|k| {
+                k == "lib" || k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib"
+            })
+        })
+        .map(|t| t.name.as_str())
+        .unwrap_or(&root.name)
+        .replace('-', "_")
+}
+
+/// Generate Swift bindings from `lib_path` into `out_dir` and install `module.modulemap`.
+/// Returns the Swift module name and the FFI (C) module name.
+fn generate_swift(
+    metadata: &Metadata,
+    lib_name: &str,
+    lib_path: &Path,
+    out_dir: &Path,
+    module_name: Option<String>,
+) -> Result<(String, String)> {
+    fs_err::create_dir_all(out_dir)?;
 
     let utf8 = |p: PathBuf| {
         Utf8PathBuf::from_path_buf(p).map_err(|p| anyhow!("non-UTF-8 path: {}", p.display()))
@@ -255,8 +317,8 @@ fn generate(
     eprintln!("  Generating Swift bindings from {}", lib_path.display());
     let generated = generate_bindings(GenerateOptions {
         languages: vec![TargetLanguage::Swift],
-        source: utf8(lib_path.clone())?,
-        out_dir: utf8(out_dir.clone())?,
+        source: utf8(lib_path.to_path_buf())?,
+        out_dir: utf8(out_dir.to_path_buf())?,
         config_override: config_override.clone(),
         ..Default::default()
     })
@@ -266,15 +328,153 @@ fn generate(
     }
     generated?;
 
-    install_spm_modulemap(&out_dir, &module_name)?;
+    let ffi_module = install_spm_modulemap(out_dir, &module_name)?;
+    Ok((module_name, ffi_module))
+}
 
-    eprintln!("✓ Generated Swift bindings in {}", out_dir.display());
-    eprintln!("  └── {module_name}.swift, {module_name}FFI.h, module.modulemap");
+/// Build `lib<crate>.a` for every [`XCFRAMEWORK_SLICES`] target, generate the bindings once, and
+/// package the archives with the FFI headers + `module.modulemap` via `xcodebuild -create-xcframework`.
+fn xcframework(release: bool, out_dir: PathBuf, module_name: Option<String>) -> Result<()> {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .exec()
+        .context("failed to run cargo metadata")?;
+    let root = resolve_library_package(&metadata)?;
+    let lib_name = lib_name(root);
+    let profile = if release { "release" } else { "debug" };
+    let target_dir = metadata.target_directory.as_std_path();
 
-    let lib_dir = lib_path.parent().context("library path has no parent")?;
-    print_linker_hints(lib_name, lib_dir, profile, resolved_mode, target.as_deref());
+    let mut slices = Vec::new();
+    for targets in XCFRAMEWORK_SLICES {
+        let mut archives = Vec::new();
+        for target in targets {
+            build(
+                release,
+                Some(target.to_string()),
+                Vec::new(),
+                Some(&root.name),
+                "staticlib",
+            )?;
+            let archive = target_dir
+                .join(target)
+                .join(profile)
+                .join(format!("lib{lib_name}.a"));
+            if !archive.exists() {
+                bail!("expected {} after building", archive.display());
+            }
+            archives.push(archive);
+        }
+        slices.push(archives);
+    }
 
+    let staging = target_dir.join(format!("eqswift-xcframework-{}", std::process::id()));
+    let result = package_xcframework(
+        &metadata,
+        &lib_name,
+        &slices,
+        &staging,
+        &out_dir,
+        module_name,
+    );
+    let _ = std::fs::remove_dir_all(&staging);
+    let (module_name, ffi_module) = result?;
+
+    eprintln!();
+    eprintln!("✓ Built XCFramework in {}", out_dir.display());
+    eprintln!(
+        "  ├── {ffi_module}.xcframework  (ios-arm64, ios-arm64_x86_64-simulator, macos-arm64)"
+    );
+    eprintln!("  └── {module_name}.swift");
+    eprintln!();
+    eprintln!("Use it from SwiftPM (copy both into your package):");
+    eprintln!(
+        "  .binaryTarget(name: \"{ffi_module}\", path: \"Frameworks/{ffi_module}.xcframework\"),"
+    );
+    eprintln!(
+        "  .target(name: \"{module_name}\", dependencies: [\"{ffi_module}\"], path: \"Sources/{module_name}\"),  // {module_name}.swift"
+    );
+    eprintln!("Then depend on \"{module_name}\" and `import {module_name}`.");
+    eprintln!("In Xcode, add {ffi_module}.xcframework to the target and {module_name}.swift to its sources.");
     Ok(())
+}
+
+/// Bindings are target-independent, so they come from the macOS archive (the last slice).
+/// The headers go in `Headers/<FFI module>/` so several XCFrameworks' `module.modulemap` files
+/// don't collide when Xcode copies headers into one include dir.
+fn package_xcframework(
+    metadata: &Metadata,
+    lib_name: &str,
+    slices: &[Vec<PathBuf>],
+    staging: &Path,
+    out_dir: &Path,
+    module_name: Option<String>,
+) -> Result<(String, String)> {
+    let _ = std::fs::remove_dir_all(staging);
+    let bindings = staging.join("bindings");
+    let macos_archive = slices
+        .last()
+        .and_then(|archives| archives.first())
+        .context("no archives built")?;
+    let (module_name, ffi_module) =
+        generate_swift(metadata, lib_name, macos_archive, &bindings, module_name)?;
+
+    let headers = staging.join("headers");
+    let module_headers = headers.join(&ffi_module);
+    fs_err::create_dir_all(&module_headers)?;
+    let modulemap = fs_err::read_to_string(bindings.join("module.modulemap"))?;
+    fs_err::write(module_headers.join("module.modulemap"), &modulemap)?;
+    // Copy the header(s) the modulemap names.
+    for line in modulemap.lines() {
+        if let Some(header) = line.trim().strip_prefix("header \"") {
+            let header = header.trim_end_matches('"');
+            fs_err::copy(bindings.join(header), module_headers.join(header))?;
+        }
+    }
+
+    fs_err::create_dir_all(out_dir)?;
+    let output = out_dir.join(format!("{ffi_module}.xcframework"));
+    if output.exists() {
+        fs_err::remove_dir_all(&output)?;
+    }
+    let mut cmd = Command::new("xcodebuild");
+    cmd.arg("-create-xcframework");
+    for (index, archives) in slices.iter().enumerate() {
+        let archive = match archives.as_slice() {
+            [single] => single.clone(),
+            several => {
+                let fat = staging
+                    .join(format!("lipo-{index}"))
+                    .join(format!("lib{lib_name}.a"));
+                fs_err::create_dir_all(fat.parent().unwrap())?;
+                let status = Command::new("lipo")
+                    .arg("-create")
+                    .args(several)
+                    .arg("-output")
+                    .arg(&fat)
+                    .status()
+                    .context("failed to run lipo")?;
+                if !status.success() {
+                    bail!("lipo -create failed for {several:?}");
+                }
+                fat
+            }
+        };
+        cmd.arg("-library")
+            .arg(&archive)
+            .arg("-headers")
+            .arg(&headers);
+    }
+    cmd.arg("-output").arg(&output);
+    eprintln!("  Running: {:?}", cmd);
+    let status = cmd
+        .status()
+        .context("failed to run xcodebuild (is Xcode installed?)")?;
+    if !status.success() {
+        bail!("xcodebuild -create-xcframework failed");
+    }
+
+    let swift = format!("{module_name}.swift");
+    fs_err::copy(bindings.join(&swift), out_dir.join(&swift))?;
+    Ok((module_name, ffi_module))
 }
 
 /// SwiftPM `systemLibrary` targets need the modulemap to be named `module.modulemap`.
@@ -282,7 +482,7 @@ fn generate(
 /// The FFI module is the one `<module_name>.swift` imports (`#if canImport(X)`), and its modulemap
 /// is the generated one declaring `module X`, so a `uniffi.toml` that sets `ffi_module_name` or
 /// `ffi_module_filename` is followed rather than assuming `<module_name>FFI.modulemap`.
-fn install_spm_modulemap(out_dir: &Path, module_name: &str) -> Result<()> {
+fn install_spm_modulemap(out_dir: &Path, module_name: &str) -> Result<String> {
     let swift = out_dir.join(format!("{module_name}.swift"));
     let ffi_module = fs_err::read_to_string(&swift)
         .ok()
@@ -309,7 +509,7 @@ fn install_spm_modulemap(out_dir: &Path, module_name: &str) -> Result<()> {
         .find(|path| std::fs::read_to_string(path).is_ok_and(|text| text.contains(&declaration)))
         .with_context(|| format!("no generated modulemap declares `module {ffi_module}`"))?;
     fs_err::copy(&src, out_dir.join("module.modulemap"))?;
-    Ok(())
+    Ok(ffi_module)
 }
 
 fn is_swift_identifier(name: &str) -> bool {

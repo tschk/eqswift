@@ -4,7 +4,7 @@ FFI framework only: UniFFI proc-macro wrappers + `cargo eqswift` for Swift bindi
 
 The `eqswift` library crate exports nothing over FFI itself: only your crate's items end up in the generated Swift and in your library's exported symbols.
 
-**Platform status:** on macOS, the integration tests prove the whole path in a fresh crate: `cargo eqswift build` produces the library and bindings, and a SwiftPM executable links the Rust library (both `lib<crate>.dylib` via rpath and `lib<crate>.a`), calls a function, a constructor and method, and a throwing function, and prints the expected results. CI also runs the Rust tests on Linux. iOS is out of scope: `cargo eqswift` does not build iOS libraries or XCFrameworks for you, `--target`/`--static` only locate an already-built library and print linker hints, and iOS linking is not tested.
+**Platform status:** on macOS, the integration tests prove the whole path in a fresh crate: `cargo eqswift build` produces the library and bindings, and a SwiftPM executable links the Rust library (both `lib<crate>.dylib` via rpath and `lib<crate>.a`), calls a function, a constructor and method, and a throwing function, and prints the expected results. For iOS, `cargo eqswift xcframework` builds `lib<crate>.a` for `aarch64-apple-ios`, `aarch64-apple-ios-sim` + `x86_64-apple-ios` (lipo'd into one simulator slice) and `aarch64-apple-darwin` and packages them as an XCFramework; the tests check its three slices, build a SwiftPM package that consumes it as a `binaryTarget` for the iOS Simulator with `xcodebuild` (a dynamic library product, so the Rust archive is linked), and build and run it on macOS. Not tested: physical-device builds, running on a booted simulator, code signing, and Intel Macs (the macOS slice is arm64 only). CI also runs the Rust tests on Linux.
 
 ## Quick Start
 
@@ -122,6 +122,7 @@ cargo eqswift swift --release          # use release build
 cargo eqswift build                    # build cdylib + staticlib, then generate Swift
 cargo eqswift swift --static           # prefer lib<crate>.a, print static link hints
 cargo eqswift swift --module-name MyKit  # override the Swift module name
+cargo eqswift xcframework              # iOS + iOS Simulator + macOS XCFramework (arm64)
 ```
 
 ## Detailed Usage
@@ -216,9 +217,31 @@ uniffi-bindgen generate --library target/debug/libmy_crate.dylib \
   --language swift --out-dir swift/Generated
 ```
 
-### Multi-platform / XCFramework
+### iOS / XCFramework
 
-Not automated. `cargo eqswift` only generates bindings from a library you have already built, for one target at a time (`--target <triple>` looks in `target/<triple>/<profile>/`). Building for iOS targets and packaging an XCFramework (e.g. `xcodebuild -create-xcframework`) is up to you and is not tested in this repo.
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+cargo eqswift xcframework [--release] [--out-dir swift/XCFramework] [--module-name MyKit]
+```
+
+This needs Xcode. It builds `lib<crate>.a` for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios` and `aarch64-apple-darwin` (`cargo rustc --crate-type staticlib --target …`), lipos the two simulator archives together (Xcode's generic iOS Simulator destination builds arm64 and x86_64, so an arm64-only slice fails to link), generates the Swift bindings once, and runs `xcodebuild -create-xcframework` with one `-library`/`-headers` pair per slice. The headers are `<module>FFI.h` + `module.modulemap` in `Headers/<module>FFI/`. For a crate `my_crate` the output directory contains:
+
+```
+swift/XCFramework/
+├── my_crateFFI.xcframework   # ios-arm64, ios-arm64_x86_64-simulator, macos-arm64
+└── my_crate.swift
+```
+
+Use it from SwiftPM (the command prints these lines):
+
+```swift
+.binaryTarget(name: "my_crateFFI", path: "Frameworks/my_crateFFI.xcframework"),
+.target(name: "my_crate", dependencies: ["my_crateFFI"], path: "Sources/my_crate"),  // my_crate.swift
+```
+
+In an Xcode project, add the `.xcframework` to the target and `my_crate.swift` to its sources. The `xcframework_builds_for_ios_simulator_and_macos` integration test builds such a package for the iOS Simulator (`xcodebuild -destination 'generic/platform=iOS Simulator'`) and for macOS (`swift build`). The macOS slice is arm64 only; device builds, simulator runs and code signing are not tested.
+
+For one other target, `cargo eqswift build --target <triple>` builds it and `cargo eqswift swift --target <triple>` reads from `target/<triple>/<profile>/`.
 
 ## Swift Package integration
 
