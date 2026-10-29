@@ -13,7 +13,7 @@ use uniffi_bindgen::bindings::{generate as generate_bindings, GenerateOptions, T
 ///   cargo eqswift swift --release          # release build artifacts
 ///   cargo eqswift swift --static           # static link hints (lib<crate>.a)
 ///   cargo eqswift swift --module-name Foo  # override the Swift module name
-///   cargo eqswift build                    # cargo build + generate Swift
+///   cargo eqswift build                    # build cdylib + staticlib, generate Swift
 #[derive(Parser)]
 #[command(name = "cargo-eqswift")]
 #[command(bin_name = "cargo")]
@@ -144,6 +144,8 @@ fn link_mode(static_link: bool) -> LinkMode {
     }
 }
 
+/// Build the package's lib as `cdylib` + `staticlib` via `cargo rustc --crate-type`, so the
+/// crate needs no `[lib] crate-type` (a plain rlib works).
 fn build(
     release: bool,
     target: Option<String>,
@@ -151,10 +153,11 @@ fn build(
     package: Option<&str>,
 ) -> Result<()> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build");
+    cmd.arg("rustc");
     if let Some(pkg) = package {
         cmd.args(["-p", pkg]);
     }
+    cmd.args(["--lib", "--crate-type", "cdylib,staticlib"]);
     if release {
         cmd.arg("--release");
     }
@@ -166,9 +169,9 @@ fn build(
     }
 
     eprintln!("  Running: {:?}", cmd);
-    let status = cmd.status().context("failed to run cargo build")?;
+    let status = cmd.status().context("failed to run cargo rustc")?;
     if !status.success() {
-        bail!("cargo build failed");
+        bail!("cargo rustc failed");
     }
     Ok(())
 }
@@ -192,9 +195,9 @@ fn generate(
         .targets
         .iter()
         .find(|t| {
-            t.kind
-                .iter()
-                .any(|k| k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib")
+            t.kind.iter().any(|k| {
+                k == "lib" || k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib"
+            })
         })
         .map(|t| t.name.as_str())
         .unwrap_or(&root.name)
@@ -203,13 +206,23 @@ fn generate(
 
     let profile = if release { "release" } else { "debug" };
 
-    let (lib_path, resolved_mode) = find_library(
-        metadata.target_directory.as_std_path(),
-        lib_name,
-        profile,
-        target.as_deref(),
-        link_mode,
-    )?;
+    let find = || {
+        find_library(
+            metadata.target_directory.as_std_path(),
+            lib_name,
+            profile,
+            target.as_deref(),
+            link_mode,
+        )
+    };
+    let (lib_path, resolved_mode) = match find() {
+        Ok(found) => found,
+        Err(_) => {
+            eprintln!("  No built library for '{lib_name}' yet; building it");
+            build(release, target.clone(), Vec::new(), Some(&root.name))?;
+            find()?
+        }
+    };
 
     fs_err::create_dir_all(&out_dir)?;
 
@@ -378,7 +391,7 @@ fn find_library(
 
     bail!(
         "could not find compiled library for '{}' in {} (tried static and dynamic). \
-         Run `cargo build` first.",
+         Run `cargo eqswift build` first.",
         lib_name,
         target_path.display()
     );

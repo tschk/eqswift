@@ -60,8 +60,22 @@ fn generate_swift(out_dir: &std::path::Path) -> std::process::ExitStatus {
 }
 
 /// Create a throwaway crate outside this workspace that depends on `eqswift` by path,
-/// the way a user would. Builds share this repo's `target/` dir.
+/// the way a user would, and build it with a `cdylib` crate-type. Builds share this repo's
+/// `target/` dir.
 fn external_crate(package_name: &str) -> tempfile::TempDir {
+    let dir = write_external_crate(package_name, "[lib]\ncrate-type = [\"cdylib\", \"rlib\"]\n");
+    let status = Command::new("cargo")
+        .args(["build", "-j2", "--quiet"])
+        .current_dir(dir.path())
+        .env("CARGO_TARGET_DIR", workspace_root().join("target"))
+        .status()
+        .expect("cargo build should run");
+    assert!(status.success(), "external crate should build");
+    dir
+}
+
+/// Write (but don't build) the throwaway crate; `lib_section` is inserted verbatim.
+fn write_external_crate(package_name: &str, lib_section: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let eqswift_path = workspace_root().join("eq-swift");
     std::fs::write(
@@ -75,9 +89,7 @@ publish = false
 
 [workspace]
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
+{lib_section}
 [dependencies]
 eqswift = {{ path = {eqswift_path:?} }}
 "#
@@ -141,19 +153,12 @@ impl Counter {
 "#,
     )
     .unwrap();
-
-    let status = Command::new("cargo")
-        .args(["build", "-j2", "--quiet"])
-        .current_dir(dir.path())
-        .env("CARGO_TARGET_DIR", workspace_root().join("target"))
-        .status()
-        .expect("cargo build should run");
-    assert!(status.success(), "external crate should build");
     dir
 }
 
-/// Run `cargo eqswift swift` (from this workspace's sources) inside `crate_dir`.
-fn run_cargo_eqswift(
+/// Run `cargo eqswift <subcommand>` (from this workspace's sources) inside `crate_dir`.
+fn run_cargo_eqswift_cmd(
+    subcommand: &str,
     crate_dir: &std::path::Path,
     out_dir: &std::path::Path,
     extra_args: &[&str],
@@ -161,13 +166,29 @@ fn run_cargo_eqswift(
     Command::new("cargo")
         .args(["run", "-j2", "--quiet", "--manifest-path"])
         .arg(workspace_root().join("Cargo.toml"))
-        .args(["-p", "cargo-eqswift", "--", "eqswift", "swift", "--out-dir"])
+        .args([
+            "-p",
+            "cargo-eqswift",
+            "--",
+            "eqswift",
+            subcommand,
+            "--out-dir",
+        ])
         .arg(out_dir)
         .args(extra_args)
         .current_dir(crate_dir)
         .env("CARGO_TARGET_DIR", workspace_root().join("target"))
+        .env("CARGO_BUILD_JOBS", "2")
         .output()
         .expect("cargo eqswift should run")
+}
+
+fn run_cargo_eqswift(
+    crate_dir: &std::path::Path,
+    out_dir: &std::path::Path,
+    extra_args: &[&str],
+) -> std::process::Output {
+    run_cargo_eqswift_cmd("swift", crate_dir, out_dir, extra_args)
 }
 
 fn cargo_eqswift_swift(crate_dir: &std::path::Path, extra_args: &[&str]) -> tempfile::TempDir {
@@ -278,6 +299,65 @@ fn external_crate_needs_only_eqswift_dependency() {
             compact.contains(&compact_needle),
             "generated Swift missing `{needle}`"
         );
+    }
+}
+
+/// Remove a crate's library artifacts from the shared target dir so a test can't pass on a
+/// leftover from an earlier run.
+fn remove_library_artifacts(lib_name: &str) {
+    let dir = target_dir();
+    for name in [
+        format!("lib{lib_name}.dylib"),
+        format!("lib{lib_name}.so"),
+        format!("lib{lib_name}.a"),
+        format!("lib{lib_name}.rlib"),
+    ] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+/// A crate with no `[lib] crate-type` (plain rlib) gets a dylib, a static archive, and bindings
+/// from `cargo eqswift build`, and `cargo eqswift swift` builds them when they are missing.
+#[test]
+fn external_crate_without_crate_type() {
+    let krate = write_external_crate("acme-plain", "");
+    let manifest = std::fs::read_to_string(krate.path().join("Cargo.toml")).unwrap();
+    assert!(
+        !manifest.contains("crate-type"),
+        "temp crate must not set crate-type"
+    );
+
+    let dylib = target_dir().join(format!(
+        "{}acme_plain{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    let archive = target_dir().join("libacme_plain.a");
+    for subcommand in ["build", "swift"] {
+        remove_library_artifacts("acme_plain");
+        let out_dir = tempfile::tempdir().unwrap();
+        let output = run_cargo_eqswift_cmd(subcommand, krate.path(), out_dir.path(), &[]);
+        assert!(
+            output.status.success(),
+            "cargo eqswift {subcommand} should succeed for an rlib-only crate:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            dylib.exists(),
+            "{subcommand}: {} should exist",
+            dylib.display()
+        );
+        assert!(
+            archive.exists(),
+            "{subcommand}: {} should exist",
+            archive.display()
+        );
+        let swift = std::fs::read_to_string(out_dir.path().join("acme_plain.swift")).unwrap();
+        assert!(
+            swift.contains("public func shout"),
+            "{subcommand}: shout missing"
+        );
+        assert!(out_dir.path().join("module.modulemap").exists());
     }
 }
 
