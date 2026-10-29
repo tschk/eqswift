@@ -15,7 +15,7 @@ The `eqswift` library crate exports nothing over FFI itself: only your crate's i
 eqswift = "0.1"
 ```
 
-That is the only dependency: `eqswift::setup!()` aliases `eqswift` as `uniffi` in your crate root, so the `::uniffi::...` paths UniFFI's proc-macros emit (and `#[uniffi::constructor]`) resolve through `eqswift`. A crate that already depends on `uniffi = "0.32"` directly keeps working; `setup!()` sees it in `Cargo.toml` and skips the alias.
+That is the only dependency: `eqswift::setup!()` aliases `eqswift` as `uniffi` in your crate root, so the `::uniffi::...` paths UniFFI's proc-macros emit (and `#[uniffi::constructor]`) resolve through `eqswift`. A crate that already depends on `uniffi = "0.32"` directly keeps working: `setup!()` reads `Cargo.toml` and turns the alias off wherever a real `uniffi` is present. That means everywhere for `[dependencies]`, on matching targets for `[target.'cfg(…)'.dependencies]`, and in the lib's own test build for `[dev-dependencies]`. A target table keyed by a triple, such as `[target.x86_64-apple-darwin.dependencies]`, is treated as active on every target; if that breaks a build for another target, key it by `cfg(…)` instead.
 
 ### 2. Write Rust
 
@@ -129,7 +129,7 @@ cargo eqswift xcframework              # iOS + iOS Simulator + macOS XCFramework
 
 ### `eqswift::setup!()`
 
-Call **once** at the top of your `lib.rs` (the crate root). It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI. Unless your `Cargo.toml` lists `uniffi` under `[dependencies]`, it also adds `extern crate eqswift as uniffi;`, which is why no direct `uniffi` dependency is needed.
+Call **once** at the top of your `lib.rs` (the crate root). It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI. It also adds `extern crate eqswift as uniffi;`, gated off wherever your `Cargo.toml` provides a real `uniffi` (see above),, which is why no direct `uniffi` dependency is needed.
 
 ```rust
 eqswift::setup!();

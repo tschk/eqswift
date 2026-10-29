@@ -772,3 +772,34 @@ let package = Package(
         "HELLO XCFRAMEWORK sum=5 divide=3 caught=true\n"
     );
 }
+
+/// `setup!()` aliases `uniffi` to `eqswift` unless the crate gets a real `uniffi`. A `uniffi`
+/// declared only for another target, or only as a dev-dependency, must not suppress the alias
+/// for a normal build here, and a dev-dependency `uniffi` must not collide with it (E0659) in
+/// the lib's own `cargo test` build.
+#[test]
+fn inactive_target_and_dev_uniffi_keep_the_alias_working() {
+    let other_target = if cfg!(windows) { "unix" } else { "windows" };
+    let krate = write_external_crate(
+        "acme-cfg",
+        &format!(
+            "[target.'cfg({other_target})'.dependencies]\nuniffi = \"0.32\"\n\n[dev-dependencies]\nuniffi = \"0.32\"\n"
+        ),
+    );
+    let cargo = |args: &[&str]| {
+        let output = Command::new("cargo")
+            .args(args)
+            .args(["-j2", "--quiet"])
+            .current_dir(krate.path())
+            .env("CARGO_TARGET_DIR", workspace_root().join("target"))
+            .output()
+            .expect("cargo should run");
+        assert!(
+            output.status.success(),
+            "cargo {args:?} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    cargo(&["build", "--lib"]);
+    cargo(&["test", "--lib", "--no-run"]);
+}
