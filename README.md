@@ -4,19 +4,18 @@ FFI framework only: UniFFI proc-macro wrappers + `cargo eqswift` for Swift bindi
 
 The `eqswift` library crate exports nothing over FFI itself: only your crate's items end up in the generated Swift and in your library's exported symbols.
 
-**Platform status:** binding generation and the integration tests are verified on macOS hosts (CI also runs the Rust tests on Linux). `cargo eqswift` does not build iOS libraries or XCFrameworks for you; `--target`/`--static` only locate an already-built library and print linker hints, and iOS linking is not covered by tests.
+**Platform status:** on macOS, the integration tests prove the whole path in a fresh crate: `cargo eqswift build` produces the library and bindings, and a SwiftPM executable links the Rust library (both `lib<crate>.dylib` via rpath and `lib<crate>.a`), calls a function, a constructor and method, and a throwing function, and prints the expected results. CI also runs the Rust tests on Linux. iOS is out of scope: `cargo eqswift` does not build iOS libraries or XCFrameworks for you, `--target`/`--static` only locate an already-built library and print linker hints, and iOS linking is not tested.
 
 ## Quick Start
 
-### 1. Add dependencies
+### 1. Add the dependency
 
 ```toml
 [dependencies]
 eqswift = "0.1"
-uniffi = "0.32"
 ```
 
-*(UniFFI must be a direct dependency because its proc-macros emit `::uniffi::...` paths.)*
+That is the only dependency: `eqswift::setup!()` aliases `eqswift` as `uniffi` in your crate root, so the `::uniffi::...` paths UniFFI's proc-macros emit (and `#[uniffi::constructor]`) resolve through `eqswift`. A crate that already depends on `uniffi = "0.32"` directly keeps working: `setup!()` reads `Cargo.toml` and turns the alias off wherever a real `uniffi` is present. That means everywhere for `[dependencies]`, on matching targets for `[target.'cfg(…)'.dependencies]`, and in the lib's own test build for `[dev-dependencies]`. A target table keyed by a triple, such as `[target.x86_64-apple-darwin.dependencies]`, is treated as active on every target; if that breaks a build for another target, key it by `cfg(…)` instead.
 
 ### 2. Write Rust
 
@@ -53,19 +52,13 @@ impl Greeter {
 }
 ```
 
-### 3. Build
+### 3. Build and generate Swift bindings
 
 ```bash
-cargo build
+cargo eqswift build
 ```
 
-### 4. Generate Swift bindings
-
-```bash
-cargo eqswift swift
-```
-
-Run it from your crate's directory. It reads the built `lib<crate>.dylib` (`.so` on Linux, `.a` with `--static`) and calls UniFFI's bindgen as a library, so your crate needs no `uniffi-bindgen` binary or extra setup. For a package named `my-crate` it writes to `swift/Generated/`:
+Run it from your crate's directory. It builds your lib with `cargo rustc --lib --crate-type cdylib,staticlib`, so your `Cargo.toml` needs no `[lib] crate-type` (the default rlib is fine), producing `lib<crate>.dylib` (`.so` on Linux) and `lib<crate>.a`. It then reads the library and calls UniFFI's bindgen as a library, so your crate needs no `uniffi-bindgen` binary or extra setup. `cargo eqswift swift` only generates, from an existing build (`.a` preferred with `--static`), and runs the same build first if no library exists yet. For a package named `my-crate` it writes to `swift/Generated/`:
 
 - `my_crate.swift` — Swift API
 - `my_crateFFI.h` — C FFI header
@@ -73,7 +66,7 @@ Run it from your crate's directory. It reads the built `lib<crate>.dylib` (`.so`
 
 Use `--module-name MyKit` to name the Swift module `MyKit` instead (`MyKit.swift`, `MyKitFFI.h`, `module MyKitFFI`).
 
-### 5. Use from Swift
+### 4. Use from Swift
 
 ```swift
 import my_crate  // or whatever your Swift target is called
@@ -124,9 +117,9 @@ cargo install cargo-eqswift            # or: cargo install --path cargo-eqswift
 Then use it from any eqswift project:
 
 ```bash
-cargo eqswift swift                    # generate Swift bindings
+cargo eqswift swift                    # generate Swift bindings (builds first if no library exists)
 cargo eqswift swift --release          # use release build
-cargo eqswift build                    # cargo build + generate Swift
+cargo eqswift build                    # build cdylib + staticlib, then generate Swift
 cargo eqswift swift --static           # prefer lib<crate>.a, print static link hints
 cargo eqswift swift --module-name MyKit  # override the Swift module name
 ```
@@ -135,7 +128,7 @@ cargo eqswift swift --module-name MyKit  # override the Swift module name
 
 ### `eqswift::setup!()`
 
-Call **once** at the top of your `lib.rs`. It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI.
+Call **once** at the top of your `lib.rs` (the crate root). It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI. It also adds `extern crate eqswift as uniffi;`, gated off wherever your `Cargo.toml` provides a real `uniffi` (see above),, which is why no direct `uniffi` dependency is needed.
 
 ```rust
 eqswift::setup!();
@@ -207,7 +200,7 @@ cargo eqswift swift
 # Generate Swift bindings (release build)
 cargo eqswift swift --release
 
-# Build + generate in one step
+# Build (cdylib + staticlib, no crate-type setup needed) + generate in one step
 cargo eqswift build
 
 # Static linking (uses lib<crate>.a when built)
@@ -229,7 +222,20 @@ Not automated. `cargo eqswift` only generates bindings from a library you have a
 
 ## Swift Package integration
 
-Point a SwiftPM `systemLibrary` target named `<module>FFI` at the output directory (it uses `module.modulemap`), add `<module>.swift` to a Swift target that depends on it, and link the Rust library with the flags `cargo eqswift` prints.
+Point a SwiftPM `systemLibrary` target named `<module>FFI` at the output directory (it uses `module.modulemap`), add `<module>.swift` to a Swift target that depends on it, and link the Rust library with the flags `cargo eqswift` prints. On macOS this is what the `swift_package_links_and_calls_rust` integration test does:
+
+```swift
+.systemLibrary(name: "my_crateFFI", path: "Sources/my_crateFFI"),  // my_crateFFI.h + module.modulemap
+.target(
+    name: "my_crate",                                                // my_crate.swift
+    dependencies: ["my_crateFFI"],
+    linkerSettings: [.unsafeFlags([
+        "-L", "<target>/debug", "-lmy_crate",                       // dylib
+        "-Xlinker", "-rpath", "-Xlinker", "<target>/debug",
+        // or static: "<target>/debug/libmy_crate.a"
+    ])]
+),
+```
 
 This repo's `swift/Package.swift` is a sample for `examples/demo`:
 
@@ -246,7 +252,7 @@ It links `target/<profile>/libeqswift_demo` (dynamic) or `-force_load` `libeqswi
 
 ### `expected …FFI.modulemap to be generated`
 
-Make sure your crate calls `eqswift::setup!()` and was built (`cargo build`) before `cargo eqswift swift`. If your `uniffi.toml` sets `[bindings.swift] module_name`, pass the same value with `--module-name`.
+Make sure your crate calls `eqswift::setup!()`. `cargo eqswift swift` reuses an existing library, so after changing exports run `cargo eqswift build` (a plain `cargo build` only refreshes the library if your `Cargo.toml` sets a `cdylib`/`staticlib` crate-type). If your `uniffi.toml` sets `[bindings.swift] module_name`, pass the same value with `--module-name`.
 
 ### Generated Swift files are empty / old
 
@@ -274,10 +280,10 @@ cargo install cargo-eqswift
 
 ## How it works
 
-1. `eqswift::setup!()` calls `uniffi::setup_scaffolding!()`, which sets up the proc-macro metadata system.
+1. `eqswift::setup!()` calls `uniffi::setup_scaffolding!()`, which sets up the proc-macro metadata system, and (without a direct `uniffi` dependency) adds `extern crate eqswift as uniffi;` — `eqswift` re-exports UniFFI's whole API, so UniFFI's generated `::uniffi::...` paths resolve through it.
 2. `#[eqswift::export]` wraps `#[uniffi::export]`, registering functions and methods in the metadata.
 3. `#[derive(eqswift::Record)]` re-exports `uniffi::Record`, which implements the FFI conversion traits.
-4. `cargo build` embeds all metadata into the compiled library.
+4. `cargo eqswift build` (`cargo rustc --lib --crate-type cdylib,staticlib`) embeds all metadata into the compiled library.
 5. `cargo eqswift` calls UniFFI's bindgen (linked in as a library) to read the metadata from the built library and generate Swift bindings named after your crate.
 
 No UDL file is ever written or parsed. The entire interface is defined by your Rust code.
@@ -293,6 +299,9 @@ cargo test -p eqswift --test integration
 This verifies:
 - `examples/demo` builds and its exported items appear in generated Swift
 - `cargo eqswift swift` works in a fresh crate outside this workspace, names the output after that crate, and honours `--module-name`
+- A fresh crate whose only dependency is `eqswift` exports functions, records, errors, and objects with constructors
+- On macOS (skipped without `swift`): a SwiftPM executable links a fresh crate's dylib and, separately, its static `.a`, calls exported functions, a constructor, a method, and a throwing function, and prints the expected output
+- A fresh crate with no `[lib] crate-type` gets `lib<crate>.dylib`, `lib<crate>.a`, and bindings from `cargo eqswift build` (and from `cargo eqswift swift` when nothing is built yet)
 - A user crate's library contains no UniFFI symbols from `eqswift` itself
 
 ## License

@@ -48,3 +48,5 @@ jobs:
       - name: Build sample Swift package
         working-directory: swift
         run: swift build
+      - name: Swift links and calls Rust (dylib + static)
+        run: cargo test --locked -p eqswift --test integration swift_package_links_and_calls_rust
