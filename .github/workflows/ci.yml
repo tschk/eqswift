@@ -22,7 +22,7 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --features cli -- -D warnings
       - name: Test
         run: cargo test --locked --workspace --features cli
-      - name: Build cdylib
+      - name: Build library
         run: cargo build --locked -p eqswift
       - name: Examples
         run: |
@@ -34,13 +34,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build library
-        run: cargo build --locked -p eqswift --features cli
+      - name: Build demo library
+        run: CARGO_TARGET_DIR=target cargo build --manifest-path examples/demo/Cargo.toml
       - name: Generate Swift bindings
-        run: cargo run --locked -p eqswift --features cli --bin uniffi-bindgen -- generate --library target/debug/libeqswift.dylib --language swift --out-dir /tmp/eqswift-swift
+        working-directory: examples/demo
+        run: CARGO_TARGET_DIR=../../target cargo run --locked --manifest-path ../../Cargo.toml -p cargo-eqswift -- eqswift swift --out-dir ../../swift/Generated
       - name: Check generated API
         run: |
-          grep -q 'public func add' /tmp/eqswift-swift/eqswift.swift
-          grep -q 'public struct Person' /tmp/eqswift-swift/eqswift.swift
-          grep -q 'open class Greeter' /tmp/eqswift-swift/eqswift.swift
-          swift --version
+          grep -q 'public func add' swift/Generated/eqswift_demo.swift
+          grep -q 'public struct Person' swift/Generated/eqswift_demo.swift
+          grep -q 'open class Greeter' swift/Generated/eqswift_demo.swift
+          grep -q 'module eqswift_demoFFI' swift/Generated/module.modulemap
+      - name: Build sample Swift package
+        working-directory: swift
+        run: swift build
