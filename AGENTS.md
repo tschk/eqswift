@@ -17,7 +17,7 @@ This is a Cargo workspace with three crates:
   - `cargo eqswift swift` — generate Swift bindings (calls `uniffi_bindgen` as a library; works in any crate)
   - `cargo eqswift build` — `cargo rustc --lib --crate-type cdylib,staticlib` + generate Swift (no crate-type setup needed in the user crate)
   - `cargo eqswift swift` runs that same build first when no library artifact exists
-  - `cargo eqswift swift --static` — prefer `lib<crate>.a` and print static link hints (iOS untested)
+  - `cargo eqswift swift --static` — prefer `lib<crate>.a` and print static link hints (macOS static link tested; iOS untested)
   - `cargo eqswift swift --module-name Foo` — override the Swift module name
 - **`examples/demo/`** — demo exports (`Person`, `Greeter`, `add`, `version`, `Task`, …); separate workspace
 
@@ -101,6 +101,7 @@ Integration tests live in `eq-swift/tests/integration.rs` and verify:
 2. `cargo eqswift swift` works in a temp crate outside the workspace and names output after it (plus `--module-name`); that crate depends only on `eqswift` and exports functions, a record, an error, and an object with a constructor
 3. A temp crate with no `[lib] crate-type` gets `.dylib`/`.a` + bindings from `cargo eqswift build` and `cargo eqswift swift`
 4. A user crate's dylib contains no `eqswift` UniFFI symbols
+5. macOS only (`swift_package_links_and_calls_rust`, skipped if `swift` is missing): a temp SwiftPM package (systemLibrary FFI target + generated Swift target + executable) links the temp crate's dylib (rpath) and then its `.a`, runs, and its printed output is asserted. SwiftPM's `.build` lives in a temp dir. CI runs it in the macOS job. iOS/XCFramework is out of scope.
 
 Nested builds use `CARGO_TARGET_DIR=<repo>/target` and `-j2`.
 

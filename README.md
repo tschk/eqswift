@@ -4,7 +4,7 @@ FFI framework only: UniFFI proc-macro wrappers + `cargo eqswift` for Swift bindi
 
 The `eqswift` library crate exports nothing over FFI itself: only your crate's items end up in the generated Swift and in your library's exported symbols.
 
-**Platform status:** binding generation and the integration tests are verified on macOS hosts (CI also runs the Rust tests on Linux). `cargo eqswift` does not build iOS libraries or XCFrameworks for you; `--target`/`--static` only locate an already-built library and print linker hints, and iOS linking is not covered by tests.
+**Platform status:** on macOS, the integration tests prove the whole path in a fresh crate: `cargo eqswift build` produces the library and bindings, and a SwiftPM executable links the Rust library (both `lib<crate>.dylib` via rpath and `lib<crate>.a`), calls a function, a constructor and method, and a throwing function, and prints the expected results. CI also runs the Rust tests on Linux. iOS is out of scope: `cargo eqswift` does not build iOS libraries or XCFrameworks for you, `--target`/`--static` only locate an already-built library and print linker hints, and iOS linking is not tested.
 
 ## Quick Start
 
@@ -222,7 +222,20 @@ Not automated. `cargo eqswift` only generates bindings from a library you have a
 
 ## Swift Package integration
 
-Point a SwiftPM `systemLibrary` target named `<module>FFI` at the output directory (it uses `module.modulemap`), add `<module>.swift` to a Swift target that depends on it, and link the Rust library with the flags `cargo eqswift` prints.
+Point a SwiftPM `systemLibrary` target named `<module>FFI` at the output directory (it uses `module.modulemap`), add `<module>.swift` to a Swift target that depends on it, and link the Rust library with the flags `cargo eqswift` prints. On macOS this is what the `swift_package_links_and_calls_rust` integration test does:
+
+```swift
+.systemLibrary(name: "my_crateFFI", path: "Sources/my_crateFFI"),  // my_crateFFI.h + module.modulemap
+.target(
+    name: "my_crate",                                                // my_crate.swift
+    dependencies: ["my_crateFFI"],
+    linkerSettings: [.unsafeFlags([
+        "-L", "<target>/debug", "-lmy_crate",                       // dylib
+        "-Xlinker", "-rpath", "-Xlinker", "<target>/debug",
+        // or static: "<target>/debug/libmy_crate.a"
+    ])]
+),
+```
 
 This repo's `swift/Package.swift` is a sample for `examples/demo`:
 
@@ -287,6 +300,7 @@ This verifies:
 - `examples/demo` builds and its exported items appear in generated Swift
 - `cargo eqswift swift` works in a fresh crate outside this workspace, names the output after that crate, and honours `--module-name`
 - A fresh crate whose only dependency is `eqswift` exports functions, records, errors, and objects with constructors
+- On macOS (skipped without `swift`): a SwiftPM executable links a fresh crate's dylib and, separately, its static `.a`, calls exported functions, a constructor, a method, and a throwing function, and prints the expected output
 - A fresh crate with no `[lib] crate-type` gets `lib<crate>.dylib`, `lib<crate>.a`, and bindings from `cargo eqswift build` (and from `cargo eqswift swift` when nothing is built yet)
 - A user crate's library contains no UniFFI symbols from `eqswift` itself
 

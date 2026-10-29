@@ -442,3 +442,137 @@ fn auto_constructor_detected() {
         "Greeter constructor should appear in generated Swift"
     );
 }
+
+/// End to end on macOS: a fresh crate (only `eqswift`, no crate-type) is built and bound by
+/// `cargo eqswift build`, and a SwiftPM executable links the Rust library (dylib via rpath,
+/// then the static `.a`), calls into it, and prints the results.
+#[cfg(target_os = "macos")]
+#[test]
+fn swift_package_links_and_calls_rust() {
+    if Command::new("swift").arg("--version").output().is_err() {
+        eprintln!("skipping swift_package_links_and_calls_rust: `swift` not found");
+        return;
+    }
+    let krate = write_external_crate("acme-link", "");
+    remove_library_artifacts("acme_link");
+
+    let pkg = tempfile::tempdir().unwrap();
+    let ffi_dir = pkg.path().join("Sources/acme_linkFFI");
+    let swift_dir = pkg.path().join("Sources/acme_link");
+    let app_dir = pkg.path().join("Sources/App");
+    for dir in [&ffi_dir, &swift_dir, &app_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let output = run_cargo_eqswift_cmd("build", krate.path(), &ffi_dir, &[]);
+    assert!(
+        output.status.success(),
+        "cargo eqswift build should succeed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::rename(
+        ffi_dir.join("acme_link.swift"),
+        swift_dir.join("acme_link.swift"),
+    )
+    .unwrap();
+    std::fs::write(
+        app_dir.join("main.swift"),
+        r#"import acme_link
+
+print(shout(s: "hello swift"))
+let counter = Counter(start: Point(x: 2, y: 3))
+print("sum=\(counter.sum())")
+print("divide=\(try! divide(a: 7, b: 2))")
+do {
+    _ = try divide(a: 1, b: 0)
+    print("no error")
+} catch is MathError {
+    print("caught MathError")
+}
+"#,
+    )
+    .unwrap();
+
+    let lib_dir = target_dir();
+    let lib_dir = lib_dir.to_str().unwrap();
+    let write_manifest = |link_flags: &str| {
+        std::fs::write(
+            pkg.path().join("Package.swift"),
+            format!(
+                r#"// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "AcmeLink",
+    platforms: [.macOS(.v13)],
+    targets: [
+        .systemLibrary(name: "acme_linkFFI", path: "Sources/acme_linkFFI"),
+        .target(
+            name: "acme_link",
+            dependencies: ["acme_linkFFI"],
+            path: "Sources/acme_link",
+            linkerSettings: [.unsafeFlags([{link_flags}])]
+        ),
+        .executableTarget(name: "App", dependencies: ["acme_link"], path: "Sources/App"),
+    ]
+)
+"#
+            ),
+        )
+        .unwrap();
+    };
+    let build_and_run = |mode: &str| -> (String, String) {
+        let scratch = pkg.path().join(".build");
+        let swift = |args: &[&str]| {
+            let output = Command::new("swift")
+                .args(args)
+                .arg("--package-path")
+                .arg(pkg.path())
+                .arg("--scratch-path")
+                .arg(&scratch)
+                .args(["-j", "2"])
+                .output()
+                .expect("swift should run");
+            assert!(
+                output.status.success(),
+                "{mode}: swift {args:?} failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        swift(&["build", "--product", "App"]);
+        let bin = PathBuf::from(swift(&["build", "--show-bin-path"]).trim()).join("App");
+        let run = Command::new(&bin).output().expect("App should run");
+        assert!(
+            run.status.success(),
+            "{mode}: App failed:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let otool = Command::new("otool").arg("-L").arg(&bin).output().unwrap();
+        (
+            String::from_utf8(run.stdout).unwrap(),
+            String::from_utf8_lossy(&otool.stdout).into_owned(),
+        )
+    };
+    let expected = "HELLO SWIFT\nsum=5\ndivide=3\ncaught MathError\n";
+
+    // Dynamic: link lib<crate>.dylib, found at run time through the rpath.
+    write_manifest(&format!(
+        r#""-L", "{lib_dir}", "-lacme_link", "-Xlinker", "-rpath", "-Xlinker", "{lib_dir}""#
+    ));
+    let (stdout, libs) = build_and_run("dynamic");
+    assert_eq!(stdout, expected, "dynamic: unexpected App output");
+    assert!(
+        libs.contains("libacme_link.dylib"),
+        "dynamic: App should load libacme_link.dylib:\n{libs}"
+    );
+
+    // Static: link lib<crate>.a directly; the binary must not reference the dylib.
+    write_manifest(&format!(r#""{lib_dir}/libacme_link.a""#));
+    let (stdout, libs) = build_and_run("static");
+    assert_eq!(stdout, expected, "static: unexpected App output");
+    assert!(
+        !libs.contains("libacme_link"),
+        "static: App should not load libacme_link.dylib:\n{libs}"
+    );
+}
