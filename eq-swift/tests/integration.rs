@@ -115,18 +115,26 @@ pub fn shout(s: String) -> String {
 }
 
 /// Run `cargo eqswift swift` (from this workspace's sources) inside `crate_dir`.
-fn cargo_eqswift_swift(crate_dir: &std::path::Path, extra_args: &[&str]) -> tempfile::TempDir {
-    let out_dir = tempfile::tempdir().unwrap();
-    let output = Command::new("cargo")
+fn run_cargo_eqswift(
+    crate_dir: &std::path::Path,
+    out_dir: &std::path::Path,
+    extra_args: &[&str],
+) -> std::process::Output {
+    Command::new("cargo")
         .args(["run", "-j2", "--quiet", "--manifest-path"])
         .arg(workspace_root().join("Cargo.toml"))
         .args(["-p", "cargo-eqswift", "--", "eqswift", "swift", "--out-dir"])
-        .arg(out_dir.path())
+        .arg(out_dir)
         .args(extra_args)
         .current_dir(crate_dir)
         .env("CARGO_TARGET_DIR", workspace_root().join("target"))
         .output()
-        .expect("cargo eqswift should run");
+        .expect("cargo eqswift should run")
+}
+
+fn cargo_eqswift_swift(crate_dir: &std::path::Path, extra_args: &[&str]) -> tempfile::TempDir {
+    let out_dir = tempfile::tempdir().unwrap();
+    let output = run_cargo_eqswift(crate_dir, out_dir.path(), extra_args);
     assert!(
         output.status.success(),
         "cargo eqswift swift should succeed in an external crate:\n{}",
@@ -173,6 +181,35 @@ fn external_crate_swift_bindings_named_after_crate() {
             .unwrap()
             .contains("module AcmeKitFFI"),
         "--module-name should rename the FFI module"
+    );
+
+    // UniFFI joins the module name onto the output dir; a path must be refused, not written.
+    let parent = tempfile::tempdir().unwrap();
+    let nested = parent.path().join("out");
+    std::fs::create_dir(&nested).unwrap();
+    let escaped = run_cargo_eqswift(krate.path(), &nested, &["--module-name", "../Escaped"]);
+    assert!(
+        !escaped.status.success(),
+        "a path-like --module-name must be rejected"
+    );
+    assert!(
+        !parent.path().join("Escaped.swift").exists(),
+        "--module-name must not write outside --out-dir"
+    );
+
+    // A crate's uniffi.toml may rename the FFI modulemap file; module.modulemap must follow it.
+    std::fs::write(
+        krate.path().join("uniffi.toml"),
+        "[bindings.swift]\nffi_module_filename = \"acme_map\"\n",
+    )
+    .unwrap();
+    let configured = cargo_eqswift_swift(krate.path(), &[]);
+    assert!(configured.path().join("acme_map.modulemap").exists());
+    assert!(
+        std::fs::read_to_string(configured.path().join("module.modulemap"))
+            .unwrap()
+            .contains("module acme_widgetsFFI"),
+        "module.modulemap should come from the configured ffi_module_filename"
     );
 }
 

@@ -216,10 +216,19 @@ fn generate(
     let utf8 = |p: PathBuf| {
         Utf8PathBuf::from_path_buf(p).map_err(|p| anyhow!("non-UTF-8 path: {}", p.display()))
     };
-    // `--module-name` is applied as a UniFFI global config override for this crate.
+    // `--module-name` is applied as a UniFFI global config override for this crate. UniFFI joins
+    // the name onto `out_dir`, so it must be a plain Swift identifier, and each invocation gets
+    // its own override file so concurrent runs sharing a target dir cannot swap names.
+    if let Some(name) = &module_name {
+        if !is_swift_identifier(name) {
+            bail!("--module-name must be a Swift identifier (letters, digits, `_`), got {name:?}");
+        }
+    }
     let config_override = match &module_name {
         Some(name) => {
-            let path = metadata.target_directory.join("eqswift-uniffi.toml");
+            let path = metadata
+                .target_directory
+                .join(format!("eqswift-uniffi-{}.toml", std::process::id()));
             fs_err::write(
                 &path,
                 format!("[crates.{lib_name}.bindings.swift]\nmodule_name = {name:?}\n"),
@@ -231,14 +240,18 @@ fn generate(
     let module_name = module_name.unwrap_or_else(|| lib_name.to_string());
 
     eprintln!("  Generating Swift bindings from {}", lib_path.display());
-    generate_bindings(GenerateOptions {
+    let generated = generate_bindings(GenerateOptions {
         languages: vec![TargetLanguage::Swift],
         source: utf8(lib_path.clone())?,
         out_dir: utf8(out_dir.clone())?,
-        config_override,
+        config_override: config_override.clone(),
         ..Default::default()
     })
-    .context("uniffi bindgen failed")?;
+    .context("uniffi bindgen failed");
+    if let Some(path) = &config_override {
+        let _ = fs_err::remove_file(path);
+    }
+    generated?;
 
     install_spm_modulemap(&out_dir, &module_name)?;
 
@@ -252,17 +265,46 @@ fn generate(
 }
 
 /// SwiftPM `systemLibrary` targets need the modulemap to be named `module.modulemap`.
+///
+/// The FFI module is the one `<module_name>.swift` imports (`#if canImport(X)`), and its modulemap
+/// is the generated one declaring `module X`, so a `uniffi.toml` that sets `ffi_module_name` or
+/// `ffi_module_filename` is followed rather than assuming `<module_name>FFI.modulemap`.
 fn install_spm_modulemap(out_dir: &Path, module_name: &str) -> Result<()> {
-    let src = out_dir.join(format!("{module_name}FFI.modulemap"));
-    if !src.exists() {
-        bail!(
-            "expected {} to be generated (does the crate call eqswift::setup!()? \
-             if uniffi.toml sets a Swift module_name, pass the same --module-name)",
-            src.display()
-        );
-    }
+    let swift = out_dir.join(format!("{module_name}.swift"));
+    let ffi_module = fs_err::read_to_string(&swift)
+        .ok()
+        .and_then(|source| {
+            let rest = source.split_once("#if canImport(")?.1;
+            Some(rest.split_once(')')?.0.trim().to_string())
+        })
+        .with_context(|| {
+            format!(
+                "expected {} to be generated (does the crate call eqswift::setup!()? \
+                 if uniffi.toml sets a Swift module_name, pass the same --module-name)",
+                swift.display()
+            )
+        })?;
+    let declaration = format!("module {ffi_module} {{");
+    let src = fs_err::read_dir(out_dir)?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "modulemap")
+                && path
+                    .file_name()
+                    .is_some_and(|name| name != "module.modulemap")
+        })
+        .find(|path| std::fs::read_to_string(path).is_ok_and(|text| text.contains(&declaration)))
+        .with_context(|| format!("no generated modulemap declares `module {ffi_module}`"))?;
     fs_err::copy(&src, out_dir.join("module.modulemap"))?;
     Ok(())
+}
+
+fn is_swift_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn print_linker_hints(
