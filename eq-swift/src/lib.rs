@@ -5,7 +5,8 @@
 //! `build.rs`, no duplication.
 //!
 //! Just annotate your items with `#[eqswift::export]` or `#[derive(eqswift::Record)]`,
-//! call `eqswift::setup!()` once at the top of `lib.rs`, and build.
+//! call `eqswift::setup!()` once at the top of `lib.rs`, and build. `eqswift` is the only
+//! dependency you need; `setup!()` makes UniFFI's `::uniffi::...` paths resolve through it.
 //!
 //! # Quick Start
 //!
@@ -75,6 +76,12 @@
 //! for the complete list.
 
 pub use eqswift_macros::{export, setup};
+
+// The whole UniFFI API, so `::uniffi::...` paths emitted by UniFFI's macros resolve through
+// `eqswift` (`setup!()` aliases this crate as `uniffi` in the user's crate root). Explicit items
+// in this file shadow glob names (`export` is eqswift's wrapper, which forwards to UniFFI's).
+#[doc(hidden)]
+pub use uniffi::*;
 
 pub use uniffi::Enum;
 pub use uniffi::Error;

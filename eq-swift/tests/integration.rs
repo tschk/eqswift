@@ -80,7 +80,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 eqswift = {{ path = {eqswift_path:?} }}
-uniffi = "0.32"
 "#
         ),
     )
@@ -99,6 +98,45 @@ uniffi = "0.32"
 #[eqswift::export]
 pub fn shout(s: String) -> String {
     s.to_uppercase()
+}
+
+#[derive(eqswift::Record)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, eqswift::Error)]
+pub enum MathError {
+    DivideByZero,
+}
+
+impl std::fmt::Display for MathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "divide by zero")
+    }
+}
+
+#[eqswift::export]
+pub fn divide(a: i32, b: i32) -> Result<i32, MathError> {
+    if b == 0 { Err(MathError::DivideByZero) } else { Ok(a / b) }
+}
+
+#[derive(eqswift::Object)]
+pub struct Counter {
+    start: Point,
+}
+
+#[eqswift::export]
+impl Counter {
+    #[uniffi::constructor]
+    pub fn new(start: Point) -> Self {
+        Self { start }
+    }
+
+    pub fn sum(&self) -> i32 {
+        self.start.x + self.start.y
+    }
 }
 "#,
     )
@@ -211,6 +249,36 @@ fn external_crate_swift_bindings_named_after_crate() {
             .contains("module acme_widgetsFFI"),
         "module.modulemap should come from the configured ffi_module_filename"
     );
+}
+
+/// A crate whose only dependency is `eqswift` (no direct `uniffi`) exports every item kind.
+#[test]
+fn external_crate_needs_only_eqswift_dependency() {
+    let krate = external_crate("acme-solo");
+    let manifest = std::fs::read_to_string(krate.path().join("Cargo.toml")).unwrap();
+    assert!(
+        !manifest.contains("uniffi"),
+        "temp crate must not depend on uniffi"
+    );
+    let out_dir = cargo_eqswift_swift(krate.path(), &[]);
+    let swift = std::fs::read_to_string(out_dir.path().join("acme_solo.swift")).unwrap();
+    // UniFFI's templates space signatures irregularly; compare with whitespace removed.
+    let compact: String = swift.split_whitespace().collect();
+    for needle in [
+        "public func shout(s: String) -> String",
+        "public struct Point",
+        "enum MathError: Swift.Error",
+        "public func divide(a: Int32, b: Int32) throws -> Int32",
+        "open class Counter",
+        "public convenience init(start: Point)",
+        "open func sum() -> Int32",
+    ] {
+        let compact_needle: String = needle.split_whitespace().collect();
+        assert!(
+            compact.contains(&compact_needle),
+            "generated Swift missing `{needle}`"
+        );
+    }
 }
 
 #[test]

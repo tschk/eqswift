@@ -8,9 +8,9 @@ This is a Cargo workspace with three crates:
 
 - **`eqswift-macros/`** — proc-macro crate (`proc-macro = true`)
   - `#[eqswift::export]` — wraps `#[uniffi::export]`
-  - `eqswift::setup!()` — wraps `uniffi::setup_scaffolding!()`
+  - `eqswift::setup!()` — wraps `uniffi::setup_scaffolding!()`; also emits `extern crate eqswift as uniffi;` unless the user's `Cargo.toml` lists `uniffi` under `[dependencies]`/`[target.*.dependencies]`
 - **`eq-swift/`** — the main library crate (library name = `eqswift`)
-  - `src/lib.rs` — re-exports only; it must not call `setup!()` or export anything (users would get those symbols/bindings)
+  - `src/lib.rs` — re-exports only (including `pub use uniffi::*`); it must not call `setup!()` or export anything (users would get those symbols/bindings)
   - `src/bin/uniffi-bindgen.rs` — plain UniFFI CLI (`--features cli`), used by this repo's tests
   - `tests/integration.rs` — demo bindings + external-crate end-to-end tests
 - **`cargo-eqswift/`** — cargo subcommand for better DX
@@ -64,17 +64,11 @@ This is a Cargo workspace with three crates:
 - **Binary name:** `uniffi-bindgen` (repo-only helper, `--features cli`). `cargo eqswift` does not need it.
 - **cargo subcommand:** `cargo-eqswift`. Install with `cargo install --path cargo-eqswift`.
 
-## Important: UniFFI must be a direct dependency
+## UniFFI is not a required direct dependency
 
-Downstream crates using `eqswift` must also add `uniffi` as a direct dependency:
+Downstream crates need only `eqswift = "0.1"`. UniFFI's proc-macros emit `::uniffi::...` paths (and users write `#[uniffi::constructor]`, which UniFFI matches by its first path segment). `setup!()` emits `extern crate eqswift as uniffi;` at the crate root; root `extern crate` items join the extern prelude, so those paths resolve to `eqswift`, which glob re-exports `uniffi::*`.
 
-```toml
-[dependencies]
-eqswift = "0.1"
-uniffi = "0.32"
-```
-
-This is because UniFFI's proc-macros (`#[uniffi::export]`, `#[uniffi::constructor]`, `uniffi::setup_scaffolding!()`) emit code that references `::uniffi::...` paths, which can only be resolved when `uniffi` is a direct dependency of the consuming crate.
+If the user's crate also depends on `uniffi` directly, the alias would be ambiguous with the `--extern uniffi` crate (E0659), so `setup!()` reads `$CARGO_MANIFEST_DIR/Cargo.toml` and skips it. `examples/*` keep their direct `uniffi = "0.32"` to cover that path. Known gap: `uniffi` only as a dev-dependency is not detected and makes `cargo test` builds of the lib ambiguous.
 
 ## Adding New Macros
 
@@ -103,7 +97,7 @@ The `swift/` directory is an optional sample Swift package. Generated bindings g
 Integration tests live in `eq-swift/tests/integration.rs` and verify:
 
 1. `examples/demo` builds and its exports (`Person`, `Greeter`, `add`, `greet`) appear in generated Swift
-2. `cargo eqswift swift` works in a temp crate outside the workspace and names output after it (plus `--module-name`)
+2. `cargo eqswift swift` works in a temp crate outside the workspace and names output after it (plus `--module-name`); that crate depends only on `eqswift` and exports functions, a record, an error, and an object with a constructor
 3. A user crate's dylib contains no `eqswift` UniFFI symbols
 
 Nested builds use `CARGO_TARGET_DIR=<repo>/target` and `-j2`.
@@ -121,7 +115,8 @@ Nested builds use `CARGO_TARGET_DIR=<repo>/target` and `-j2`.
 
 ## Dependencies
 
-- `uniffi = "0.32"` — core FFI framework
+- `uniffi = "0.32"` — core FFI framework (re-exported by `eqswift`; users don't add it)
+- `toml` (in `eqswift-macros`) — `setup!()` reads the user manifest to detect a direct `uniffi` dependency
 - `eqswift-macros` — our thin proc-macro wrappers
 - `cargo-eqswift` — cargo subcommand for binding generation (depends on `uniffi_bindgen = "0.32"`)
 

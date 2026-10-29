@@ -8,15 +8,14 @@ The `eqswift` library crate exports nothing over FFI itself: only your crate's i
 
 ## Quick Start
 
-### 1. Add dependencies
+### 1. Add the dependency
 
 ```toml
 [dependencies]
 eqswift = "0.1"
-uniffi = "0.32"
 ```
 
-*(UniFFI must be a direct dependency because its proc-macros emit `::uniffi::...` paths.)*
+That is the only dependency: `eqswift::setup!()` aliases `eqswift` as `uniffi` in your crate root, so the `::uniffi::...` paths UniFFI's proc-macros emit (and `#[uniffi::constructor]`) resolve through `eqswift`. A crate that already depends on `uniffi = "0.32"` directly keeps working; `setup!()` sees it in `Cargo.toml` and skips the alias.
 
 ### 2. Write Rust
 
@@ -135,7 +134,7 @@ cargo eqswift swift --module-name MyKit  # override the Swift module name
 
 ### `eqswift::setup!()`
 
-Call **once** at the top of your `lib.rs`. It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI.
+Call **once** at the top of your `lib.rs` (the crate root). It expands to `uniffi::setup_scaffolding!()` and configures the crate for proc-macro-based FFI. Unless your `Cargo.toml` lists `uniffi` under `[dependencies]`, it also adds `extern crate eqswift as uniffi;`, which is why no direct `uniffi` dependency is needed.
 
 ```rust
 eqswift::setup!();
@@ -274,7 +273,7 @@ cargo install cargo-eqswift
 
 ## How it works
 
-1. `eqswift::setup!()` calls `uniffi::setup_scaffolding!()`, which sets up the proc-macro metadata system.
+1. `eqswift::setup!()` calls `uniffi::setup_scaffolding!()`, which sets up the proc-macro metadata system, and (without a direct `uniffi` dependency) adds `extern crate eqswift as uniffi;` — `eqswift` re-exports UniFFI's whole API, so UniFFI's generated `::uniffi::...` paths resolve through it.
 2. `#[eqswift::export]` wraps `#[uniffi::export]`, registering functions and methods in the metadata.
 3. `#[derive(eqswift::Record)]` re-exports `uniffi::Record`, which implements the FFI conversion traits.
 4. `cargo build` embeds all metadata into the compiled library.
@@ -293,6 +292,7 @@ cargo test -p eqswift --test integration
 This verifies:
 - `examples/demo` builds and its exported items appear in generated Swift
 - `cargo eqswift swift` works in a fresh crate outside this workspace, names the output after that crate, and honours `--module-name`
+- A fresh crate whose only dependency is `eqswift` exports functions, records, errors, and objects with constructors
 - A user crate's library contains no UniFFI symbols from `eqswift` itself
 
 ## License
