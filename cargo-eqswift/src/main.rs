@@ -1,15 +1,18 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use cargo_metadata::camino::Utf8PathBuf;
 use cargo_metadata::{Metadata, Package};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use uniffi_bindgen::bindings::{generate as generate_bindings, GenerateOptions, TargetLanguage};
 
 /// cargo eqswift — zero-config Rust-to-Swift FFI
 ///
 /// Examples:
 ///   cargo eqswift swift                    # generate Swift bindings (dylib)
 ///   cargo eqswift swift --release          # release build artifacts
-///   cargo eqswift swift --static           # static link hints (libeqswift.a)
+///   cargo eqswift swift --static           # static link hints (lib<crate>.a)
+///   cargo eqswift swift --module-name Foo  # override the Swift module name
 ///   cargo eqswift build                    # cargo build + generate Swift
 #[derive(Parser)]
 #[command(name = "cargo-eqswift")]
@@ -38,6 +41,9 @@ enum EqswiftCmd {
         out_dir: PathBuf,
         #[arg(long)]
         target: Option<String>,
+        /// Swift module name (default: the crate's lib name, e.g. `my_crate`)
+        #[arg(long)]
+        module_name: Option<String>,
         #[arg(
             long = "static",
             help = "Resolve lib{name}.a and print static SPM linker flags"
@@ -51,6 +57,9 @@ enum EqswiftCmd {
         out_dir: PathBuf,
         #[arg(long)]
         target: Option<String>,
+        /// Swift module name (default: the crate's lib name, e.g. `my_crate`)
+        #[arg(long)]
+        module_name: Option<String>,
         #[arg(long = "static")]
         static_link: bool,
         #[arg(last = true)]
@@ -75,12 +84,20 @@ fn main() -> Result<()> {
             release,
             out_dir,
             target,
+            module_name,
             static_link,
-        } => generate(release, out_dir, target, link_mode(static_link)),
+        } => generate(
+            release,
+            out_dir,
+            target,
+            module_name,
+            link_mode(static_link),
+        ),
         EqswiftCmd::Build {
             release,
             out_dir,
             target,
+            module_name,
             static_link,
             cargo_args,
         } => {
@@ -89,7 +106,13 @@ fn main() -> Result<()> {
                 .context("failed to run cargo metadata")?;
             let root = resolve_library_package(&meta)?;
             build(release, target.clone(), cargo_args, Some(&root.name))?;
-            generate(release, out_dir, target, link_mode(static_link))
+            generate(
+                release,
+                out_dir,
+                target,
+                module_name,
+                link_mode(static_link),
+            )
         }
     }
 }
@@ -154,6 +177,7 @@ fn generate(
     release: bool,
     out_dir: PathBuf,
     target: Option<String>,
+    module_name: Option<String>,
     link_mode: LinkMode,
 ) -> Result<()> {
     let metadata = cargo_metadata::MetadataCommand::new()
@@ -162,6 +186,8 @@ fn generate(
 
     let root = resolve_library_package(&metadata)?;
 
+    // Rust crate name of the lib target: names the artifact (`lib{name}.dylib`) and is
+    // UniFFI's default namespace, which names the generated Swift files.
     let lib_name = root
         .targets
         .iter()
@@ -171,7 +197,9 @@ fn generate(
                 .any(|k| k == "cdylib" || k == "dylib" || k == "staticlib" || k == "rlib")
         })
         .map(|t| t.name.as_str())
-        .unwrap_or(&root.name);
+        .unwrap_or(&root.name)
+        .replace('-', "_");
+    let lib_name = lib_name.as_str();
 
     let profile = if release { "release" } else { "debug" };
 
@@ -185,26 +213,37 @@ fn generate(
 
     fs_err::create_dir_all(&out_dir)?;
 
-    let mut cmd = Command::new("cargo");
-    cmd.args(["run", "-p", &root.name]);
-    if root.features.contains_key("cli") {
-        cmd.args(["--features", "cli"]);
-    }
-    cmd.args(["--bin", "uniffi-bindgen", "--", "generate", "--library"]);
-    cmd.arg(&lib_path);
-    cmd.args(["--language", "swift", "--out-dir"]);
-    cmd.arg(&out_dir);
+    let utf8 = |p: PathBuf| {
+        Utf8PathBuf::from_path_buf(p).map_err(|p| anyhow!("non-UTF-8 path: {}", p.display()))
+    };
+    // `--module-name` is applied as a UniFFI global config override for this crate.
+    let config_override = match &module_name {
+        Some(name) => {
+            let path = metadata.target_directory.join("eqswift-uniffi.toml");
+            fs_err::write(
+                &path,
+                format!("[crates.{lib_name}.bindings.swift]\nmodule_name = {name:?}\n"),
+            )?;
+            Some(path)
+        }
+        None => None,
+    };
+    let module_name = module_name.unwrap_or_else(|| lib_name.to_string());
 
-    eprintln!("  Running: {:?}", cmd);
-    let status = cmd.status().context("failed to run uniffi-bindgen")?;
-    if !status.success() {
-        bail!("uniffi-bindgen failed");
-    }
+    eprintln!("  Generating Swift bindings from {}", lib_path.display());
+    generate_bindings(GenerateOptions {
+        languages: vec![TargetLanguage::Swift],
+        source: utf8(lib_path.clone())?,
+        out_dir: utf8(out_dir.clone())?,
+        config_override,
+        ..Default::default()
+    })
+    .context("uniffi bindgen failed")?;
 
-    install_spm_modulemap(&out_dir)?;
+    install_spm_modulemap(&out_dir, &module_name)?;
 
     eprintln!("✓ Generated Swift bindings in {}", out_dir.display());
-    eprintln!("  └── eqswift.swift  (and eqswiftFFI headers)");
+    eprintln!("  └── {module_name}.swift, {module_name}FFI.h, module.modulemap");
 
     let lib_dir = lib_path.parent().context("library path has no parent")?;
     print_linker_hints(lib_name, lib_dir, profile, resolved_mode, target.as_deref());
@@ -212,12 +251,17 @@ fn generate(
     Ok(())
 }
 
-fn install_spm_modulemap(out_dir: &Path) -> Result<()> {
-    let src = out_dir.join("eqswiftFFI.modulemap");
-    let dst = out_dir.join("module.modulemap");
-    if src.exists() && !dst.exists() {
-        fs_err::copy(&src, &dst)?;
+/// SwiftPM `systemLibrary` targets need the modulemap to be named `module.modulemap`.
+fn install_spm_modulemap(out_dir: &Path, module_name: &str) -> Result<()> {
+    let src = out_dir.join(format!("{module_name}FFI.modulemap"));
+    if !src.exists() {
+        bail!(
+            "expected {} to be generated (does the crate call eqswift::setup!()? \
+             if uniffi.toml sets a Swift module_name, pass the same --module-name)",
+            src.display()
+        );
     }
+    fs_err::copy(&src, out_dir.join("module.modulemap"))?;
     Ok(())
 }
 
