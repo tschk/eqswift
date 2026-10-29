@@ -19,6 +19,7 @@ This is a Cargo workspace with three crates:
   - `cargo eqswift swift` runs that same build first when no library artifact exists
   - `cargo eqswift swift --static` — prefer `lib<crate>.a` and print static link hints (macOS static link tested; iOS untested)
   - `cargo eqswift swift --module-name Foo` — override the Swift module name
+  - `cargo eqswift xcframework` — staticlib for `aarch64-apple-ios`, `aarch64-apple-ios-sim` + `x86_64-apple-ios` (lipo'd: Xcode's generic simulator destination builds both archs), `aarch64-apple-darwin`, bindings generated once (from the macOS `.a`), then `xcodebuild -create-xcframework` → `<out>/<module>FFI.xcframework` (headers in `Headers/<module>FFI/`) + `<out>/<module>.swift` (default out `swift/XCFramework`). No x86_64 macOS slice.
 - **`examples/demo/`** — demo exports (`Person`, `Greeter`, `add`, `version`, `Task`, …); separate workspace
 
 ## Build Steps
@@ -101,7 +102,8 @@ Integration tests live in `eq-swift/tests/integration.rs` and verify:
 2. `cargo eqswift swift` works in a temp crate outside the workspace and names output after it (plus `--module-name`); that crate depends only on `eqswift` and exports functions, a record, an error, and an object with a constructor
 3. A temp crate with no `[lib] crate-type` gets `.dylib`/`.a` + bindings from `cargo eqswift build` and `cargo eqswift swift`
 4. A user crate's dylib contains no `eqswift` UniFFI symbols
-5. macOS only (`swift_package_links_and_calls_rust`, skipped if `swift` is missing): a temp SwiftPM package (systemLibrary FFI target + generated Swift target + executable) links the temp crate's dylib (rpath) and then its `.a`, runs, and its printed output is asserted. SwiftPM's `.build` lives in a temp dir. CI runs it in the macOS job. iOS/XCFramework is out of scope.
+5. macOS only (`swift_package_links_and_calls_rust`, skipped if `swift` is missing): a temp SwiftPM package (systemLibrary FFI target + generated Swift target + executable) links the temp crate's dylib (rpath) and then its `.a`, runs, and its printed output is asserted. SwiftPM's `.build` lives in a temp dir. CI runs it in the macOS job.
+6. macOS only (`xcframework_builds_for_ios_simulator_and_macos`, skipped if `xcodebuild` or the active rustc's std for the four targets is missing; CI sets `EQSWIFT_REQUIRE_XCFRAMEWORK=1` so it fails instead): `cargo eqswift xcframework` on a temp crate; asserts the Info.plist lists `ios-arm64`, `ios-arm64_x86_64-simulator`, `macos-arm64`; a temp SwiftPM package (`binaryTarget` + generated Swift target + dynamic `AcmeKit` library + `App`) is built for the iOS Simulator with `xcodebuild -destination 'generic/platform=iOS Simulator'` (DerivedData in a temp dir; `nm` checks the Rust export was linked into `AcmeKit.framework`) and built + run on macOS with `swift build`. Not covered: device builds, booted simulator, code signing. CI runs it in the macOS job.
 
 Nested builds use `CARGO_TARGET_DIR=<repo>/target` and `-j2`.
 

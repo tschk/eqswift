@@ -577,6 +577,202 @@ let package = Package(
     );
 }
 
+/// Rust targets `cargo eqswift xcframework` builds, with the XCFramework slice each becomes.
+#[cfg(target_os = "macos")]
+const XCFRAMEWORK_SLICES: [(&[&str], &str); 3] = [
+    (&["aarch64-apple-ios"], "ios-arm64"),
+    (
+        &["aarch64-apple-ios-sim", "x86_64-apple-ios"],
+        "ios-arm64_x86_64-simulator",
+    ),
+    (&["aarch64-apple-darwin"], "macos-arm64"),
+];
+
+/// End to end on macOS: `cargo eqswift xcframework` packages a fresh crate (only `eqswift`) for
+/// iOS, the iOS Simulator and macOS, and a SwiftPM package consuming it as a `binaryTarget`
+/// builds for the iOS Simulator (a dynamic library product, so the Rust archive is linked) with
+/// `xcodebuild`, and builds and runs on macOS with `swift build`.
+#[cfg(target_os = "macos")]
+#[test]
+fn xcframework_builds_for_ios_simulator_and_macos() {
+    // CI sets EQSWIFT_REQUIRE_XCFRAMEWORK so a missing prerequisite fails instead of skipping
+    // and reporting `ok` for a test that never ran.
+    let required = std::env::var_os("EQSWIFT_REQUIRE_XCFRAMEWORK").is_some();
+    let skip = |reason: String| {
+        assert!(!required, "EQSWIFT_REQUIRE_XCFRAMEWORK is set but {reason}");
+        eprintln!("skipping xcframework test: {reason}");
+    };
+    if Command::new("xcodebuild").arg("-version").output().is_err() {
+        return skip("`xcodebuild` not found".into());
+    }
+    // Ask the `rustc` the nested cargo will use, not rustup: a non-rustup Rust (e.g. Homebrew's)
+    // first on PATH has no iOS std even when rustup lists the targets.
+    let sysroot = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_default();
+    let missing: Vec<&str> = XCFRAMEWORK_SLICES
+        .iter()
+        .flat_map(|(targets, _)| targets.iter().copied())
+        .filter(|target| !sysroot.join("lib/rustlib").join(target).exists())
+        .collect();
+    if !missing.is_empty() {
+        return skip(format!(
+            "the active rustc ({}) has no std for {missing:?}",
+            sysroot.display()
+        ));
+    }
+
+    let krate = write_external_crate("acme-xcf", "");
+    let pkg = tempfile::tempdir().unwrap();
+    let frameworks = pkg.path().join("Frameworks");
+    let output = run_cargo_eqswift_cmd("xcframework", krate.path(), &frameworks, &[]);
+    assert!(
+        output.status.success(),
+        "cargo eqswift xcframework should succeed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let xcframework = frameworks.join("acme_xcfFFI.xcframework");
+    let plist = std::fs::read_to_string(xcframework.join("Info.plist"))
+        .expect("acme_xcfFFI.xcframework/Info.plist should exist");
+    for (_, slice) in XCFRAMEWORK_SLICES {
+        assert!(
+            plist.contains(&format!("<string>{slice}</string>")),
+            "Info.plist should list the {slice} library:\n{plist}"
+        );
+        assert!(
+            xcframework.join(slice).join("libacme_xcf.a").exists(),
+            "{slice} slice should contain libacme_xcf.a"
+        );
+    }
+
+    let swift_dir = pkg.path().join("Sources/acme_xcf");
+    let kit_dir = pkg.path().join("Sources/AcmeKit");
+    let app_dir = pkg.path().join("Sources/App");
+    for dir in [&swift_dir, &kit_dir, &app_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::rename(
+        frameworks.join("acme_xcf.swift"),
+        swift_dir.join("acme_xcf.swift"),
+    )
+    .expect("acme_xcf.swift should be generated next to the XCFramework");
+    std::fs::write(
+        kit_dir.join("AcmeKit.swift"),
+        r#"import acme_xcf
+
+public func acmeReport() -> String {
+    let counter = Counter(start: Point(x: 2, y: 3))
+    let caught: Bool
+    do {
+        _ = try divide(a: 1, b: 0)
+        caught = false
+    } catch {
+        caught = error is MathError
+    }
+    return "\(shout(s: "hello xcframework")) sum=\(counter.sum()) divide=\(try! divide(a: 7, b: 2)) caught=\(caught)"
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        app_dir.join("main.swift"),
+        "import AcmeKit\n\nprint(acmeReport())\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pkg.path().join("Package.swift"),
+        r#"// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "AcmeXcf",
+    platforms: [.macOS(.v13), .iOS(.v16)],
+    products: [
+        .library(name: "AcmeKit", type: .dynamic, targets: ["AcmeKit"]),
+    ],
+    targets: [
+        .binaryTarget(name: "acme_xcfFFI", path: "Frameworks/acme_xcfFFI.xcframework"),
+        .target(name: "acme_xcf", dependencies: ["acme_xcfFFI"], path: "Sources/acme_xcf"),
+        .target(name: "AcmeKit", dependencies: ["acme_xcf"], path: "Sources/AcmeKit"),
+        .executableTarget(name: "App", dependencies: ["AcmeKit"], path: "Sources/App"),
+    ]
+)
+"#,
+    )
+    .unwrap();
+
+    // iOS Simulator: build (no simulator is booted) the dynamic AcmeKit product, which links
+    // the ios-arm64-simulator archive.
+    let derived = tempfile::tempdir().unwrap();
+    let xcode = Command::new("xcodebuild")
+        .args([
+            "-scheme",
+            "AcmeKit",
+            "-destination",
+            "generic/platform=iOS Simulator",
+            "-derivedDataPath",
+        ])
+        .arg(derived.path())
+        .args(["-jobs", "2", "CODE_SIGNING_ALLOWED=NO", "build"])
+        .current_dir(pkg.path())
+        .output()
+        .expect("xcodebuild should run");
+    assert!(
+        xcode.status.success(),
+        "xcodebuild for the iOS Simulator failed:\n{}\n{}",
+        String::from_utf8_lossy(&xcode.stdout),
+        String::from_utf8_lossy(&xcode.stderr)
+    );
+    let products = derived.path().join("Build/Products/Debug-iphonesimulator");
+    let kit = products.join("PackageFrameworks/AcmeKit.framework/AcmeKit");
+    let nm = Command::new("nm")
+        .arg(&kit)
+        .output()
+        .expect("nm should run");
+    assert!(
+        String::from_utf8_lossy(&nm.stdout).contains("uniffi_acme_xcf_fn_func_shout"),
+        "{} should contain the linked Rust export",
+        kit.display()
+    );
+    drop(derived);
+
+    // macOS: `swift build` links the macos-arm64 archive into the App executable, which runs.
+    let scratch = pkg.path().join(".build");
+    let swift = |args: &[&str]| {
+        let output = Command::new("swift")
+            .args(args)
+            .arg("--package-path")
+            .arg(pkg.path())
+            .arg("--scratch-path")
+            .arg(&scratch)
+            .args(["-j", "2"])
+            .output()
+            .expect("swift should run");
+        assert!(
+            output.status.success(),
+            "swift {args:?} failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    swift(&["build", "--product", "App"]);
+    let bin = PathBuf::from(swift(&["build", "--show-bin-path"]).trim()).join("App");
+    let run = Command::new(&bin).output().expect("App should run");
+    assert!(
+        run.status.success(),
+        "App failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).unwrap(),
+        "HELLO XCFRAMEWORK sum=5 divide=3 caught=true\n"
+    );
+}
+
 /// `setup!()` aliases `uniffi` to `eqswift` unless the crate gets a real `uniffi`. A `uniffi`
 /// declared only for another target, or only as a dev-dependency, must not suppress the alias
 /// for a normal build here, and a dev-dependency `uniffi` must not collide with it (E0659) in
