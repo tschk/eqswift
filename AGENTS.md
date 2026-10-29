@@ -8,7 +8,7 @@ This is a Cargo workspace with three crates:
 
 - **`eqswift-macros/`** — proc-macro crate (`proc-macro = true`)
   - `#[eqswift::export]` — wraps `#[uniffi::export]`
-  - `eqswift::setup!()` — wraps `uniffi::setup_scaffolding!()`; also emits `extern crate eqswift as uniffi;` unless the user's `Cargo.toml` lists `uniffi` under `[dependencies]`/`[target.*.dependencies]`
+  - `eqswift::setup!()` — wraps `uniffi::setup_scaffolding!()`; also emits `extern crate eqswift as uniffi;` gated off where the user's `Cargo.toml` gives the crate a real `uniffi`: none for `[dependencies]`, `#[cfg(not(p))]` for `[target.'cfg(p)'.dependencies]`, `#[cfg(not(test))]` for `[dev-dependencies]`
 - **`eq-swift/`** — the main library crate (library name = `eqswift`)
   - `src/lib.rs` — re-exports only (including `pub use uniffi::*`); it must not call `setup!()` or export anything (users would get those symbols/bindings)
   - `src/bin/uniffi-bindgen.rs` — plain UniFFI CLI (`--features cli`), used by this repo's tests
@@ -69,7 +69,7 @@ This is a Cargo workspace with three crates:
 
 Downstream crates need only `eqswift = "0.1"`. UniFFI's proc-macros emit `::uniffi::...` paths (and users write `#[uniffi::constructor]`, which UniFFI matches by its first path segment). `setup!()` emits `extern crate eqswift as uniffi;` at the crate root; root `extern crate` items join the extern prelude, so those paths resolve to `eqswift`, which glob re-exports `uniffi::*`.
 
-If the user's crate also depends on `uniffi` directly, the alias would be ambiguous with the `--extern uniffi` crate (E0659), so `setup!()` reads `$CARGO_MANIFEST_DIR/Cargo.toml` and skips it. `examples/*` keep their direct `uniffi = "0.32"` to cover that path. Known gap: `uniffi` only as a dev-dependency is not detected and makes `cargo test` builds of the lib ambiguous.
+If the user's crate also depends on `uniffi` directly, the alias would be ambiguous with the `--extern uniffi` crate (E0659), so `setup!()` reads `$CARGO_MANIFEST_DIR/Cargo.toml` and gates the alias off wherever a real `uniffi` is present (see above). `examples/*` keep their direct `uniffi = "0.32"` to cover the no-alias path; `inactive_target_and_dev_uniffi_keep_the_alias_working` covers the cfg-gated paths. Remaining gap: a target table keyed by a triple (`[target.x86_64-apple-darwin.dependencies]`) can't be expressed as a `cfg`, so it is treated as always active.
 
 ## Adding New Macros
 
