@@ -10,13 +10,15 @@ This is a Cargo workspace with three crates:
   - `#[eqswift::export]` — wraps `#[uniffi::export]`
   - `eqswift::setup!()` — wraps `uniffi::setup_scaffolding!()`
 - **`eq-swift/`** — the main library crate (library name = `eqswift`)
-  - `src/lib.rs` — user-facing Rust code + re-exports
-  - `src/bin/uniffi-bindgen.rs` — CLI binary for generating bindings
-  - `tests/integration.rs` — smoke tests (library compiles, bindings generate correctly)
+  - `src/lib.rs` — re-exports only; it must not call `setup!()` or export anything (users would get those symbols/bindings)
+  - `src/bin/uniffi-bindgen.rs` — plain UniFFI CLI (`--features cli`), used by this repo's tests
+  - `tests/integration.rs` — demo bindings + external-crate end-to-end tests
 - **`cargo-eqswift/`** — cargo subcommand for better DX
-  - `cargo eqswift swift` — generate Swift bindings
+  - `cargo eqswift swift` — generate Swift bindings (calls `uniffi_bindgen` as a library; works in any crate)
   - `cargo eqswift build` — build + generate Swift
-  - `cargo eqswift swift --static` — static link hints for iOS
+  - `cargo eqswift swift --static` — prefer `lib<crate>.a` and print static link hints (iOS untested)
+  - `cargo eqswift swift --module-name Foo` — override the Swift module name
+- **`examples/demo/`** — demo exports (`Person`, `Greeter`, `add`, `version`, `Task`, …); separate workspace
 
 ## Build Steps
 
@@ -34,23 +36,18 @@ This is a Cargo workspace with three crates:
    cargo eqswift swift --out-dir swift/Generated
    ```
 
-3. **Or generate via uniffi-bindgen directly:**
+3. **Or, in this repo, generate the demo via uniffi-bindgen directly:**
    ```bash
-   # macOS
-   cargo run --features cli --bin uniffi-bindgen generate \
-     --library target/debug/libeqswift.dylib \
-     --language swift --out-dir eq-swift/swift/Generated
-
-   # Linux
-   cargo run --features cli --bin uniffi-bindgen generate \
-     --library target/debug/libeqswift.so \
-     --language swift --out-dir eq-swift/swift/Generated
+   CARGO_TARGET_DIR=target cargo build --manifest-path examples/demo/Cargo.toml
+   cargo run -p eqswift --features cli --bin uniffi-bindgen -- generate \
+     --library target/debug/libeqswift_demo.dylib \
+     --language swift --out-dir /tmp/eqswift-demo
    ```
 
-4. **Verify bindings were created:**
+4. **Verify bindings were created** (names follow the crate's lib name):
    ```bash
    ls swift/Generated/
-   # should show: eqswift.swift, eqswiftFFI.h, eqswiftFFI.modulemap
+   # for crate my_crate: my_crate.swift, my_crateFFI.h, my_crateFFI.modulemap, module.modulemap
    ```
 
 5. **Run integration tests:**
@@ -62,9 +59,9 @@ This is a Cargo workspace with three crates:
 
 - **No UDL files.** The project uses UniFFI's proc-macro mode exclusively.
 - **No build.rs.** Everything is driven by proc macros at compile time.
-- **Library crate-type:** `cdylib`, `staticlib`, `rlib` (required for FFI).
+- **Library crate-type:** user crates (and `examples/*`) need `cdylib`/`staticlib`; the `eqswift` crate itself is a plain rlib.
 - **Proc-macro re-exports:** `eqswift::Record`, `eqswift::Object`, `eqswift::Enum`, `eqswift::Error` are just re-exports of `uniffi::Record`, `uniffi::Object`, etc. This lets users write `#[derive(eqswift::Record)]` instead of `#[derive(uniffi::Record)]`.
-- **Binary name:** `uniffi-bindgen`. It requires `uniffi = { version = "...", features = ["cli"] }`.
+- **Binary name:** `uniffi-bindgen` (repo-only helper, `--features cli`). `cargo eqswift` does not need it.
 - **cargo subcommand:** `cargo-eqswift`. Install with `cargo install --path cargo-eqswift`.
 
 ## Important: UniFFI must be a direct dependency
@@ -91,7 +88,7 @@ If you need to add a new derive or attribute macro to `eqswift-macros`:
 
 When editing `eq-swift/src/lib.rs`:
 
-- Keep the example structs/functions (`Person`, `Greeter`, `add`, `version`) — they serve as a smoke test.
+- Do not add exported items or `setup!()` here; put demo/smoke-test exports in `examples/demo/src/lib.rs`.
 - Remember that only `pub` items in `#[eqswift::export]` or with `#[derive(...)]` are visible to Swift.
 - If you add a new exported function, rebuild and regenerate bindings to verify.
 
@@ -99,40 +96,33 @@ When editing `eq-swift/src/lib.rs`:
 
 The `swift/` directory is an optional sample Swift package. Generated bindings go in `swift/Generated/` via `cargo eqswift swift --out-dir swift/Generated` (gitignored). This repo is an FFI framework only — no app transports or product logic in the `eqswift` crate.
 
-- `swift/Package.swift` consumes `Generated/` and links `target/<profile>/libeqswift` (see `EQSWIFT_PROFILE`, `EQSWIFT_STATIC`).
-- Link the Rust library (`libeqswift.dylib` / `.so` / `.a`) to the Swift target.
+- `swift/Package.swift` is a sample for `examples/demo`: it consumes `Generated/` and links `target/<profile>/libeqswift_demo` (see `EQSWIFT_PROFILE`, `EQSWIFT_STATIC`).
 
 ## Testing
 
 Integration tests live in `eq-swift/tests/integration.rs` and verify:
 
-1. Library compiles and `.dylib`/`.so` exists
-2. Swift bindings are generated with correct files
-3. Exported items (`Person`, `Greeter`, `add`, `greet`) appear in generated Swift
+1. `examples/demo` builds and its exports (`Person`, `Greeter`, `add`, `greet`) appear in generated Swift
+2. `cargo eqswift swift` works in a temp crate outside the workspace and names output after it (plus `--module-name`)
+3. A user crate's dylib contains no `eqswift` UniFFI symbols
 
-A quick smoke test is:
-
-```bash
-cargo build
-cargo eqswift swift --out-dir /tmp/eqswift-test
-head -n 20 /tmp/eqswift-test/eqswift.swift
-```
+Nested builds use `CARGO_TARGET_DIR=<repo>/target` and `-j2`.
 
 ## Common Issues
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `no bin target named uniffi-bindgen` | Missing `[[bin]]` or `--features cli` | Check `eq-swift/Cargo.toml` |
+| `no bin target named uniffi-bindgen` | Running the repo-only helper without `--features cli` | `cargo run -p eqswift --features cli --bin uniffi-bindgen` |
 | `setup_scaffolding!` not found | Wrong UniFFI version or missing `setup!()` | Ensure `eqswift::setup!()` is called |
 | Empty generated Swift | Bindings generated before library built | Build library first, then run bindgen |
 | Type not in Swift | Not public / not in exported signature | Make type `pub` and use it in an exported function |
 | `cargo eqswift` not found | Not installed | Run `cargo install --path cargo-eqswift` |
-| Old library artifact picked up | `libeq_swift.dylib` vs `libeqswift.dylib` | Delete old artifacts from `target/debug/` |
+| `expected …FFI.modulemap to be generated` | Crate not built, no `setup!()`, or `uniffi.toml` renames the module | Build first; pass matching `--module-name` |
 
 ## Dependencies
 
 - `uniffi = "0.32"` — core FFI framework
 - `eqswift-macros` — our thin proc-macro wrappers
-- `cargo-eqswift` — cargo subcommand for binding generation
+- `cargo-eqswift` — cargo subcommand for binding generation (depends on `uniffi_bindgen = "0.32"`)
 
 Do not bump the UniFFI minor version without checking the [upgrade guide](https://mozilla.github.io/uniffi-rs/latest/Upgrading.html).

@@ -10,9 +10,6 @@ keywords = ["ffi", "swift", "uniffi", "bindings", "ios"]
 categories = ["development-tools::ffi"]
 rust-version = "1.87"
 
-[lib]
-crate-type = ["cdylib", "staticlib", "rlib"]
-
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"

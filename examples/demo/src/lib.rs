@@ -5,11 +5,9 @@
 //! cargo build --manifest-path examples/demo/Cargo.toml
 //! ```
 //!
-//! Generate Swift bindings:
+//! Generate Swift bindings (from `examples/demo`):
 //! ```bash
-//! cargo run --bin uniffi-bindgen generate \
-//!   --library target/debug/libeqswift_demo.dylib \
-//!   --language swift --out-dir examples/demo/swift
+//! cargo eqswift swift --out-dir swift/Generated
 //! ```
 
 eqswift::setup!();
@@ -50,4 +48,41 @@ impl TaskManager {
 #[eqswift::export]
 pub fn greet(name: String) -> String {
     format!("Hello, {name}!")
+}
+
+/// A simple data record exported to Swift as a `struct`.
+#[derive(eqswift::Record)]
+pub struct Person {
+    pub name: String,
+    pub age: u32,
+}
+
+/// An object exported to Swift as a `class` with methods.
+#[derive(eqswift::Object, Default)]
+pub struct Greeter;
+
+#[eqswift::export]
+impl Greeter {
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn greet(&self, name: String) -> String {
+        format!("Hello, {name}!")
+    }
+
+    pub fn greet_person(&self, person: Person) -> String {
+        format!("Hello, {}! You are {} years old.", person.name, person.age)
+    }
+}
+
+#[eqswift::export]
+pub fn add(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+#[eqswift::export]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
